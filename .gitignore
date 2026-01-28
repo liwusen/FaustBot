@@ -16,3 +16,4 @@ asr-hub/
 bert-hub/
 rag-hub/
 tts-hub/
+*.private.json

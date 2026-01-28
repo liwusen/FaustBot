@@ -1,7 +1,9 @@
 from langchain.tools import tool
 import os
-os.environ["DEEPSEEK_API_KEY"]="sk-3b6954e22333401d9cbb033a0ae9e8bb"
-os.environ["SEARCHAPI_API_KEY"]="zNj5f2XcQWnbzuHnk2Vi31hR"
+
+import faust_backend.config_loader as conf
+os.environ["SEARCHAPI_API_KEY"]=conf.SEARCH_API_KEY
+
 import functools,inspect,os,sys
 import socket
 import io
@@ -9,6 +11,25 @@ from faust_backend.searchapi_patched import SearchApiAPIWrapper
 from langchain_community.utilities import WikipediaAPIWrapper
 import winsound
 toollist=[]
+
+HumanInTheLoopConfig={  
+                "pythonExecTool": {  
+                    "allowed_decisions": ["approve", "edit", "reject"]  
+                },
+                "sysExecTool": {  
+                    "allowed_decisions": ["approve", "edit", "reject"]  
+                },
+                "listDirectoryTool": {  
+                    "allowed_decisions": ["approve", "edit", "reject"]  
+                },
+                "readTextFileTool": {  
+                    "allowed_decisions": ["approve", "edit", "reject"]  
+                },
+                "writeTextFileTool": {  
+                    "allowed_decisions": ["approve", "edit", "reject"]  
+                }
+            } 
+
 #define add to TOOLLIST wrapper
 def __init__():
     print("[Faust.backend.llm_tools] Initializing llm_tools module...")

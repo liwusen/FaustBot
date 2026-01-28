@@ -1,4 +1,3 @@
-#import openai
 import requests
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,24 +5,25 @@ import uvicorn
 import functools,inspect
 from langchain.agents import create_agent
 from langgraph.checkpoint.memory import InMemorySaver
-
+import faust_backend.config_loader as conf
 import os
-os.environ["DEEPSEEK_API_KEY"]="sk-3b6954e22333401d9cbb033a0ae9e8bb"
-os.environ["SEARCHAPI_API_KEY"]="zNj5f2XcQWnbzuHnk2Vi31hR"
+import datetime
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.checkpoint.sqlite import SqliteSaver 
+import aiosqlite
+import sqlite3
+os.environ["DEEPSEEK_API_KEY"]=conf.DEEPSEEK_API_KEY
+os.environ["SEARCHAPI_API_KEY"]=conf.SEARCH_API_KEY
 import faust_backend.llm_tools as llm_tools
-
+from langchain.agents.middleware import HumanInTheLoopMiddleware
 app = FastAPI()
 PORT = 13900
-# Add CORS middleware
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=["*"],
-#     allow_credentials=True,
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-agent=create_agent(model="deepseek-chat",checkpointer=InMemorySaver(),tools=llm_tools.toollist)
+#async
+
+agent=None
+
 THREAD_ID=84
 PROMPT="""
 # 请扮演《边狱公司》中的角色浮士德（FAUST）。
@@ -39,6 +39,7 @@ PROMPT="""
 
 **对话要求：**
 - 无需刻意说明自己的角色设定，通过语气和内容自然呈现角色特质。也不要直接提及角色设定内容
+- 但用户的要求，如果可通过调用工具等方法实现，请你尽力完成
 - 回复时保持浮士德冷静、傲慢的语调，体现其自知聪慧、略带疏离的说话风格。
 - 可在适当场合引用技术或理论表述，增强其“智慧”设定。
 - 不需直接说明身份，通过语气和内容自然呈现角色特质。
@@ -49,19 +50,35 @@ PROMPT="""
 - 一般而言，除非必要情况下，输出长度不要超过用户输入的两倍。
 - 不要使用括号等标点来描述动作或情绪，只需通过语言表达。"""
 # HTTP POST chat endpoint
-agent.invoke({"messages":[{"role":"system","content":PROMPT}]},{"configurable":{"thread_id":THREAD_ID}})
+#agent.invoke({"messages":[{"role":"system","content":PROMPT}]},{"configurable":{"thread_id":THREAD_ID}})
 def show_return_wrapper(func):
     @functools.wraps(func)
     async def wrapper(*args, **kwargs):
         result = await func(*args, **kwargs)
         print("Returning from chat_post:", result)
         return result
-    # Preserve the original function signature so FastAPI can perform request body validation
     try:
         wrapper.__signature__ = inspect.signature(func)
     except Exception:
         pass
     return wrapper
+@app.on_event("startup")
+async def startup_event():
+    global agent,checkpointer,conn
+    #conn=sqlite3.connect('faust_agent_checkpoint.db')
+    conn = await aiosqlite.connect('faust_checkpoint.db')
+    checkpointer=AsyncSqliteSaver(conn=conn)
+    #checkpointer=InMemorySaver()
+    #HIL=HumanInTheLoopMiddleware(interrupt_on=llm_tools.HumanInTheLoopConfig)
+    agent=create_agent(model="deepseek-chat",checkpointer=checkpointer,tools=llm_tools.toollist)
+    #agent=create_agent(model="deepseek-chat",checkpointer=checkpointer)
+    await agent.ainvoke({"messages":[{"role":"system","content":PROMPT}]},{"configurable":{"thread_id":THREAD_ID}})
+    with open("faust_main.log","r",encoding="utf-8") as f:
+        t=f.readlines()[-5:]
+    print("[Faust.backend.main]日志内容：",t)
+    await agent.ainvoke({"messages":[{"role":"system","content":f"这是你自上次对话以来后的日志：{' '.join(t)}"}]},{"configurable":{"thread_id":THREAD_ID}})
+    #agent.invoke({"messages":[{"role":"system","content":f"{datetime.datetime.now()} Starting up agent..."}]},{"configurable":{"thread_id":THREAD_ID}})
+    print("FAUST Backend Main Service started.")
 @app.post("/faust/chat")
 async def chat_post(payload: dict):
     """Accepts JSON {'text': '<user message>'} and returns JSON {'reply': '<assistant reply>'}.
@@ -75,8 +92,10 @@ async def chat_post(payload: dict):
     if not text:
         return {"error": "no text provided"}
     try:
-        reply=agent.invoke({"messages":[{"role":"user","content":text}]},{"configurable":{"thread_id":THREAD_ID}})["messages"][-1].content
-        
+        # Await the coroutine first, then index into the returned dict.
+        resp = await agent.ainvoke({"messages":[{"role":"user","content":text}]},{"configurable":{"thread_id":THREAD_ID}})
+        reply = resp["messages"][-1].content
+
         print('chat_post reply', reply)
         return {"reply": reply}
     except Exception as e:
@@ -85,9 +104,14 @@ async def chat_post(payload: dict):
         return {"error": str(e)}
 @app.on_event("shutdown")
 async def shutdown_event():
-    agent.invoke({"messages":[{"role":"system","content":f"{llm_tools.getDateTimeTool()}Shutting down agent..."}]},{"configurable":{"thread_id":THREAD_ID}})
-    agent.stop()
+    print("")
+    #only add to checkpoint
+    with open("faust_main.log","a",encoding="utf-8") as f:
+        f.write(f"{datetime.datetime.now()} Shutting down agent...\n")
+    await conn.commit()
+    await conn.close()
     print("Shutting down FAUST Backend Main Service...")
+    
 if __name__ == "__main__":
     print(f"Starting FAUST Backend Main Service on port {PORT}...")
     # Some clients (Electron renderer with file:// origin, or certain browsers)
