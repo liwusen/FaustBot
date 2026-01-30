@@ -17,3 +17,4 @@ bert-hub/
 rag-hub/
 tts-hub/
 *.private.json
+faust_checkpoint.db

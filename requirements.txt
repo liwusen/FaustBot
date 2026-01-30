@@ -1,5 +1,5 @@
-#ASR+LLM依赖
 
+websockets
 fastapi
 uvicorn
 python-multipart
@@ -42,3 +42,5 @@ langgraph-checkpoint-sqlite==3.0.3
 
 #qwen-vl 依赖
 qwen-vl-utils==0.0.14
+
+#

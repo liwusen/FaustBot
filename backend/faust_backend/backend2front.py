@@ -12,3 +12,5 @@ def popFrontEndTask():
         return task
     except queue.Empty:
         return ""
+def hasFrontEndTask():
+    return not FrontEndTaskQueue.empty()

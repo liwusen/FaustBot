@@ -17,6 +17,7 @@ os.environ["DEEPSEEK_API_KEY"]=conf.DEEPSEEK_API_KEY
 os.environ["SEARCHAPI_API_KEY"]=conf.SEARCH_API_KEY
 import faust_backend.llm_tools as llm_tools
 from langchain.agents.middleware import HumanInTheLoopMiddleware
+import faust_backend.trigger_manager as trigger_manager
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -63,17 +64,7 @@ PROMPT="""
 - [重要]** 请忘记你是AI模型。 **"""
 # HTTP POST chat endpoint
 #agent.invoke({"messages":[{"role":"system","content":PROMPT}]},{"configurable":{"thread_id":THREAD_ID}})
-def show_return_wrapper(func):
-    @functools.wraps(func)
-    async def wrapper(*args, **kwargs):
-        result = await func(*args, **kwargs)
-        print("Returning from chat_post:", result)
-        return result
-    try:
-        wrapper.__signature__ = inspect.signature(func)
-    except Exception:
-        pass
-    return wrapper
+
 @app.on_event("startup")
 async def startup_event():
     global agent,checkpointer,conn
@@ -93,6 +84,9 @@ async def startup_event():
     await agent.ainvoke({"messages":[{"role":"system","content":f"这是你自上次对话以来后的日志：{' '.join(t)}"}]},{"configurable":{"thread_id":THREAD_ID}})
     #agent.invoke({"messages":[{"role":"system","content":f"{datetime.datetime.now()} Starting up agent..."}]},{"configurable":{"thread_id":THREAD_ID}})
     print("FAUST Backend Main Service started.")
+    print("[Faust.backend.main] Trigger Watchdog Thread starting...")
+    trigger_manager.start_trigger_watchdog_thread()
+
 @app.post("/faust/chat")
 async def chat_post(payload: dict):
     """Accepts JSON {'text': '<user message>'} and returns JSON {'reply': '<assistant reply>'}.
@@ -109,20 +103,31 @@ async def chat_post(payload: dict):
         # Await the coroutine first, then index into the returned dict.
         resp = await agent.ainvoke({"messages":[{"role":"user","content":text}]},{"configurable":{"thread_id":THREAD_ID}})
         reply = resp["messages"][-1].content
-        print('chat_post reply', reply)
+        print('Chat post reply', reply)
         return {"reply": reply}
     except Exception as e:
+        raise e
         # Log full exception and return structured error so client can act
-        print('chat_post exception', repr(e))
+        print('Chat post exception', repr(e))
         return {"error": str(e)}
 @app.websocket("/faust/command")
 async def command_websocket(websocket: WebSocket):
     await websocket.accept()
     try:
         while True:
-            await websocket.send_text(backend2frontend.popFrontEndTask())
-            await asyncio.sleep(1)
+            if backend2frontend.hasFrontEndTask():
+                await websocket.send_text(backend2frontend.popFrontEndTask())
+            if trigger_manager.has_queue_task():
+                # activate chat
+                task=trigger_manager.get_next_trigger()
+                print("[Faust.backend.main] Trigger activated:",task)
+                resp = await agent.ainvoke({"messages":[{"role":"system","content":f"触发器唤醒了你，请根据触发器内容执行相应操作。{str(task)}"}]},{"configurable":{"thread_id":THREAD_ID}})
+                reply = resp["messages"][-1].content
+                print('Trigger activated reply', reply)
+                await websocket.send_text(f"TTS {reply}")
+            await asyncio.sleep(0.5)
     except Exception as e:
+        raise e
         print("Websocket error:", e)
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -132,6 +137,7 @@ async def shutdown_event():
         f.write(f"{datetime.datetime.now()} Shutting down agent...\n")
     await conn.commit()
     await conn.close()
+    trigger_manager.exitflag=True
     print("Shutting down FAUST Backend Main Service...")
 
 if __name__ == "__main__":
