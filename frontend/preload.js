@@ -19,3 +19,8 @@ contextBridge.exposeInMainWorld('faust', {
     });
   }
 });
+
+// allow renderer to send logs to main process console
+contextBridge.exposeInMainWorld('logToMain', {
+  info: (msg) => ipcRenderer.invoke('faust-log', String(msg)).catch(()=>{}),
+});

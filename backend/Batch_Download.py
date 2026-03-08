@@ -310,47 +310,6 @@ def download_live2d_model():
 
     return False
 
-
-# 开始下载Live2D模型
-print("开始下载Live2D模型...")
-download_live2d_model()
-
-# 1. 下载Omni_fn_bert模型到bert-hub文件夹
-print("\n========== 检查Omni_fn_bert模型 ==========")
-
-bert_hub_dir = os.path.join(current_dir, "bert-hub")
-if not os.path.exists(bert_hub_dir):
-    os.makedirs(bert_hub_dir)
-
-# 检查Omni_fn_bert模型关键文件
-omni_model_files = ["config.json", "model.safetensors", "vocab.txt"]
-omni_key_files = [os.path.join(bert_hub_dir, f) for f in omni_model_files]
-print(f"检查路径: {bert_hub_dir}")
-print(f"检查文件: {omni_key_files}")
-omni_already_downloaded = all(os.path.exists(f) for f in omni_key_files)
-print(f"文件存在状态: {[os.path.exists(f) for f in omni_key_files]}")
-
-if omni_already_downloaded:
-    print("检测到Omni_fn_bert模型已经下载完成，跳过下载步骤")
-else:
-    print(f"Omni_fn_bert模型未完整下载，开始下载到: {bert_hub_dir}")
-
-    # 切换到bert-hub目录
-    os.chdir(bert_hub_dir)
-
-    # 使用ModelScope下载Omni_fn_bert模型，带重试机制
-    if not download_with_retry("modelscope download --model morelle/Omni_fn_bert --local_dir ./"):
-        print("Omni_fn_bert模型下载失败，终止程序")
-        exit(1)
-
-    # 检查下载的模型是否存在 - ModelScope直接下载到指定目录
-    # 检查一些关键文件是否存在来确认模型是否下载成功
-    missing_files = [f for f in omni_model_files if not os.path.exists(os.path.join(bert_hub_dir, f))]
-    if missing_files:
-        print(f"错误：下载后无法找到Omni_fn_bert模型的关键文件: {', '.join(missing_files)}")
-        exit(1)
-    print("Omni_fn_bert模型下载成功！")
-
 # 返回到原始目录
 os.chdir(current_dir)
 

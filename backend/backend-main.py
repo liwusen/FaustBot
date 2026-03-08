@@ -10,9 +10,9 @@ import faust_backend.backend2front as backend2frontend
 import os
 import datetime
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langgraph.checkpoint.sqlite import SqliteSaver 
 import aiosqlite
 import asyncio
+import queue
 os.environ["DEEPSEEK_API_KEY"]=conf.DEEPSEEK_API_KEY
 os.environ["SEARCHAPI_API_KEY"]=conf.SEARCH_API_KEY
 import faust_backend.llm_tools as llm_tools
@@ -28,6 +28,8 @@ app.add_middleware(
 )
 PORT = 13900
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+forward_queue=queue.Queue()
 
 #async
 
@@ -73,7 +75,7 @@ async def startup_event():
     checkpointer=AsyncSqliteSaver(conn=conn)
     print("[Faust.backend.main]Connected to SQLite database for checkpointing.")
     #checkpointer=InMemorySaver()
-    #HIL=HumanInTheLoopMiddleware(interrupt_on=llm_tools.HumanInTheLoopConfig)
+    HIL=HumanInTheLoopMiddleware(interrupt_on=llm_tools.HumanInTheLoopConfig)
     print("[Faust.backend.main]Agent.toollist:",llm_tools.toollist)
     agent=create_agent(model="deepseek-chat",checkpointer=checkpointer,tools=llm_tools.toollist)
     print("[Faust.backend.main]Agent created with Deepseek-chat model and tools.")
@@ -106,10 +108,9 @@ async def chat_post(payload: dict):
         print('Chat post reply', reply)
         return {"reply": reply}
     except Exception as e:
-        raise e
-        # Log full exception and return structured error so client can act
-        print('Chat post exception', repr(e))
+        print("Chat post error:", e)
         return {"error": str(e)}
+
 @app.websocket("/faust/command")
 async def command_websocket(websocket: WebSocket):
     await websocket.accept()
@@ -125,10 +126,30 @@ async def command_websocket(websocket: WebSocket):
                 reply = resp["messages"][-1].content
                 print('Trigger activated reply', reply)
                 await websocket.send_text(f"TTS {reply}")
-            await asyncio.sleep(0.5)
+            if not forward_queue.empty():
+                command=forward_queue.get()
+                print("[Faust.backend.main] Forwarding command from queue:",command)
+                await websocket.send_text(f"{command}")
+            await asyncio.sleep(0.05)
     except Exception as e:
-        raise e
         print("Websocket error:", e)
+        await websocket.send_text(f"TTS backend error::{e}")
+@app.post("/faust/command/forward")
+async def command_forward_post(payload: dict):
+    """Forwards a command from frontend to the agent and returns the reply."""
+    command = None
+    if isinstance(payload, dict):
+        command = payload.get('command')
+    if not command:
+        return {"error": "no command provided"}
+    forward_queue.put(command)
+    return {"status": "command forwarded"}
+
+@app.post("/faust/status")
+async def status_post():
+    """Returns JSON {'status': 'ok'} to indicate the service is running."""
+    active_tasks = trigger_manager.get_trigger_information()
+    return {"status": "ok", "active_tasks": active_tasks}
 @app.on_event("shutdown")
 async def shutdown_event():
     print("")
@@ -137,7 +158,7 @@ async def shutdown_event():
         f.write(f"{datetime.datetime.now()} Shutting down agent...\n")
     await conn.commit()
     await conn.close()
-    trigger_manager.exitflag=True
+    trigger_manager.stop_trigger_watchdog_thread()
     print("Shutting down FAUST Backend Main Service...")
 
 if __name__ == "__main__":

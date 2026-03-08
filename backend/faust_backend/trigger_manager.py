@@ -1,4 +1,3 @@
-# ...existing code...
 from typing import List, Union, Literal, Optional
 import datetime
 import time
@@ -141,7 +140,11 @@ def start_trigger_watchdog_thread():
     global _thread
     _thread = threading.Thread(target=trigger_watchdog_thread_main, daemon=True)
     _thread.start()
-
+def stop_trigger_watchdog_thread():
+    global exitflag
+    exitflag=True
+    if _thread is not None:
+        _thread.join()
 
 def get_next_trigger(timeout: Optional[float] = None):
     try:

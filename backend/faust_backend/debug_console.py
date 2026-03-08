@@ -57,8 +57,11 @@ def chat_request(text: str, timeout: int = 30):
 def main():
     print("debug-console 启动。HTTP:", HTTP_URL, "WS:", WS_URL)
     print("说明: 输入文本并回车发送到 /faust/chat。输入 exit 或 Ctrl+C 退出。")
-    start_ws_listener()
-
+    if input("WS 监听器启动？(Y/n)> ").strip().lower() not in ("n", "no"):
+        start_ws_listener()
+        print("WS 监听器已启动。")
+    else:
+        print("WS 监听器未启动。")
     try:
         while True:
             try:
@@ -71,6 +74,11 @@ def main():
             if text.lower() in ("exit", "quit"):
                 print("退出中...")
                 break
+            if text.lower().startswith("ws"):
+                requests.post(HTTP_URL.replace("/faust/chat", "/faust/command/forward"), json={"command": text[2:].strip()})
+                print("[INFO] 已通过 /faust/command/forward 转发命令到 WS。")
+                print("[WS COMMAND]", text[2:].strip(),sep="")
+                continue
             resp = chat_request(text)
             if "reply" in resp:
                 print("[REPLY]", resp["reply"])

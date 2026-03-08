@@ -35,6 +35,9 @@
 
   document.getElementById('app').appendChild(app.view);
 
+  // expose PIXI globally so external plugins / examples can access PIXI and Ticker
+  try{ window.PIXI = PIXI; }catch(e){/* ignore in non-browser env */}
+
   let currentModel = null;
   let dragging = false;
   let dragOffset = {x:0,y:0};
@@ -249,6 +252,8 @@
   //   SAY <text>
   //   STOP
   let bgAudio = null;
+  // expressions supported by current model (populated when model loads)
+  let supportedExpressions = [];
 
   async function handleFaustCommand(raw){
     if (!raw || typeof raw !== 'string') return;
@@ -290,6 +295,15 @@
         try{ stopAudio(); }catch(e){}
         try{ stopMicAsr(); }catch(e){}
       } else {
+        // support EXPR <name> [value]
+        if (cmd === 'EXPR'){
+          if (!arg) return;
+          const parts = arg.split(' ');
+          const name = parts[0];
+          const val = parts[1] ? parseFloat(parts[1]) : undefined;
+          applyExpression(name, val);
+          return;
+        }
         console.warn('Unknown faust command', raw);
       }
     }catch(e){ console.error('handleFaustCommand error', e); }
@@ -298,6 +312,169 @@
   // register handler from preload-exposed API
   if (window.faust && window.faust.onCommand){
     window.faust.onCommand((cmd)=>{ handleFaustCommand(cmd); });
+  }
+
+  // Apply an expression by name. Try multiple Live2D APIs for compatibility.
+  function applyExpression(name, value){
+    if (!currentModel) { console.warn('No model loaded to apply expression'); return; }
+    let applied = false;
+    try{
+      const core = currentModel.internalModel && currentModel.internalModel.coreModel;
+      // 1) expressionManager.setExpression(name)
+      try{
+        if (core && core.expressionManager && typeof core.expressionManager.setExpression === 'function'){
+          core.expressionManager.setExpression(name);
+          applied = true;
+        }
+      }catch(e){}
+      // 2) motionManager.startMotion('expressions', name)
+      if (!applied){
+        try{
+          const mm = currentModel.internalModel && currentModel.internalModel.motionManager;
+          if (mm && typeof mm.startMotion === 'function'){
+            // try by group 'expressions' then 'motions'
+            try{ mm.startMotion('expressions', name); applied = true; }catch(e){}
+            if (!applied){ try{ mm.startMotion('motions', name); applied = true; }catch(e){} }
+          }
+        }catch(e){}
+      }
+      // 3) model.setExpression(name)
+      if (!applied && typeof currentModel.setExpression === 'function'){
+        try{ currentModel.setExpression(name); applied = true; }catch(e){}
+      }
+      // 4) fallback: try mapping common expressions to parameters (best-effort)
+      if (!applied){
+        const coreSet = core && typeof core.setParameterValueById === 'function';
+        const map = {
+          smile: { ParamMouthForm: (typeof value === 'number' ? value : 1) },
+          sad: { ParamMouthForm: (typeof value === 'number' ? -value : -1) }
+        };
+        if (map[name]){
+          for (const pid in map[name]){
+            try{
+              const v = map[name][pid];
+              if (coreSet) core.setParameterValueById(pid, v);
+              else if (core && core.parameters && core.parameters[pid] && typeof core.parameters[pid].setValue === 'function') core.parameters[pid].setValue(v);
+              applied = true;
+            }catch(e){}
+          }
+        }
+      }
+    }catch(e){ console.warn('applyExpression error', e); }
+    if (!applied) console.warn('Expression not applied (unsupported):', name);
+    else console.log('Expression applied:', name, value);
+    return applied;
+  }
+
+  // helper: when model loads, probe available expressions and print them
+  function probeExpressionsForModel(model){
+    const list = [];
+    try{
+      const core = model.internalModel && model.internalModel.coreModel;
+      if (core){
+        if (Array.isArray(core.expressions) && core.expressions.length){
+          for (const e of core.expressions){ if (e && e.name) list.push(e.name); }
+        }
+        if (core.expressionManager && core.expressionManager._expressions){
+          try{ list.push(...Object.keys(core.expressionManager._expressions || {})); }catch(e){}
+        }
+      }
+      if (model.expressions && typeof model.expressions === 'object'){
+        try{ list.push(...Object.keys(model.expressions)); }catch(e){}
+      }
+      // try motion groups as a hint
+      const mm = model.internalModel && model.internalModel.motionManager;
+      if (mm && mm._motions){
+        try{ list.push(...Object.keys(mm._motions)); }catch(e){}
+      }
+    }catch(e){ /* ignore probing errors */ }
+    // dedupe
+    const uniq = Array.from(new Set(list)).filter(Boolean);
+    supportedExpressions = uniq;
+    // print supported expressions to renderer console and forward to main
+    try{ console.log('Supported expressions:', supportedExpressions); }catch(e){}
+    try{ if (window.logToMain && window.logToMain.info) window.logToMain.info('Supported expressions: ' + JSON.stringify(supportedExpressions)); }catch(e){}
+    try{ renderExpressionsUI(); }catch(e){}
+  }
+
+  // Probe the model3.json by fetching the JSON at the same path used to load the model.
+  // This extracts motion group names and motion file basenames as candidate expressions.
+  async function probeExpressionsFromModelJson(modelJsonPath){
+    if (!modelJsonPath) return;
+    try{
+      // try fetch; works for relative paths in electron renderer
+      const r = await fetch(modelJsonPath);
+      if (!r.ok) return;
+      const j = await r.json();
+      const list = [];
+      // collect explicit expressions if present
+      if (j.Expressions && Array.isArray(j.Expressions)){
+        for (const e of j.Expressions){ if (e && e.Name) list.push(e.Name); }
+      }
+      // collect motion group names and motion filenames
+      const mref = j.FileReferences && j.FileReferences.Motions;
+      if (mref && typeof mref === 'object'){
+        for (const groupName of Object.keys(mref)){
+          // include the group name
+          list.push(groupName);
+          const group = mref[groupName];
+          if (Array.isArray(group)){
+            for (const entry of group){
+              if (entry && entry.File){
+                // basename without extension
+                const fn = entry.File.replace(/^.*[\\/]/, '');
+                const base = fn.replace(/\.motion3\.json$/i, '').replace(/\.json$/i, '');
+                if (base) list.push(base);
+              }
+            }
+          }
+        }
+      }
+      // dedupe and merge with existing supportedExpressions
+      const uniq = Array.from(new Set((supportedExpressions || []).concat(list))).filter(Boolean);
+      supportedExpressions = uniq;
+      try{ console.log('Supported expressions (from model json):', supportedExpressions); }catch(e){}
+      try{ if (window.logToMain && window.logToMain.info) window.logToMain.info('Supported expressions (from model json): ' + JSON.stringify(supportedExpressions)); }catch(e){}
+      try{ renderExpressionsUI(); }catch(e){}
+    }catch(err){ console.warn('probeExpressionsFromModelJson failed', err); }
+  }
+
+  // Render supportedExpressions into a small UI list (click to trigger EXPR)
+  function renderExpressionsUI(){
+    let parent = document.getElementById('controls') || document.body;
+    let container = document.getElementById('expression-controls');
+    if (!container){
+      container = document.createElement('div');
+      container.id = 'expression-controls';
+      container.style.cssText = 'position:relative; max-width:320px; padding:8px; background:rgba(0,0,0,0.35); color:#fff; font-size:14px; overflow:auto; max-height:220px;';
+      // try to insert into controls if exists
+      if (document.getElementById('controls')) document.getElementById('controls').appendChild(container);
+      else document.body.appendChild(container);
+    }
+    // header
+    container.innerHTML = '';
+    const h = document.createElement('div');
+    h.textContent = 'Expressions';
+    h.style.cssText = 'font-weight:bold; margin-bottom:6px;';
+    container.appendChild(h);
+    if (!supportedExpressions || supportedExpressions.length === 0){
+      const p = document.createElement('div'); p.textContent = '(none)'; p.style.opacity = '0.7'; container.appendChild(p); return; }
+    const list = document.createElement('div');
+    list.style.display = 'flex'; list.style.flexWrap = 'wrap'; list.style.gap = '6px';
+    for (const name of supportedExpressions){
+      const btn = document.createElement('button');
+      btn.textContent = name;
+      btn.style.cssText = 'padding:6px 8px; background:#222; color:#fff; border:1px solid #444; border-radius:4px; cursor:pointer;';
+      btn.addEventListener('click', async ()=>{
+        console.log('EXPR click:', name);
+        try{
+          const ok = applyExpression(name);
+          console.log(`EXPR ${name} -> ${ok ? 'OK' : 'FAILED'}`);
+        }catch(e){ console.error('EXPR handler error', e); }
+      });
+      list.appendChild(btn);
+    }
+    container.appendChild(list);
   }
 
   async function sendToChat(text){
@@ -321,37 +498,23 @@
         const reply = j.reply;
         console.log('chat reply:', reply);
         showAsrText(reply);
-        // pause ASR if running and not in voice-barge-in mode
-        let resumeAfter = true;
-        if (asrRunning && !voiceBargeInEnabled){ pauseRecording(); resumeAfter = true; }
+  // pause ASR if running and not in voice-barge-in mode
+  let resumeAfter = false;
+  if (asrRunning && !voiceBargeInEnabled){ pauseRecording(); resumeAfter = true; }
         //if <NO_TTS_OUTPUT> in output, skip TTS playback
         if (reply.includes('<NO_TTS_OUTPUT>')){
           chatStatusEl && (chatStatusEl.textContent = '聊天完成（无语音输出）');
         }else{
-          synthesizeAndPlay(reply, 'zh');
-        }
-        if (resumeAfter){
-          startMicAsr(); // simpler to just restart ASR
-          // Prefer event-driven resume when audio ends. startMouthSyncFromFile
-          // assigns `audioEl` and begins playback; attach a one-time
-          // 'ended' listener to resume recording. Also add a safety timeout
-          // in case 'ended' does not fire (autoplay/codec issues).
           try{
-            if (audioEl && typeof audioEl.addEventListener === 'function'){
-              const onEnd = () => { try{ resumeRecording(); }catch(e){} finally { audioEl.removeEventListener('ended', onEnd); if (safetyTimer) clearTimeout(safetyTimer); } };
-              audioEl.addEventListener('ended', onEnd);
-              // safety timeout: resume after 30s if ended event didn't fire
-              var safetyTimer = setTimeout(()=>{ try{ resumeRecording(); }catch(e){} }, 30000);
-            } else {
-              // fallback to polling if audioEl is not yet available
-              const waiter = setInterval(()=>{
-                if (!audioEl || audioEl.ended){
-                  try{ resumeRecording(); }catch(e){}
-                  clearInterval(waiter);
-                }
-              }, 250);
-            }
-          }catch(e){ console.warn('resumeAfter attach err', e); }
+            // synthesizeAndPlay now returns a promise that resolves when all
+            // playback (possibly chunked) has finished — await it so we can
+            // reliably resume ASR afterwards.
+            await synthesizeAndPlay(reply, 'zh');
+          }catch(e){ console.warn('TTS playback error', e); }
+          if (resumeAfter){
+            // restart ASR capture after playback finished
+            resumeRecording();
+          }
         }
         chatStatusEl && (chatStatusEl.textContent = '聊天完成');
       } else if (j && j.error){
@@ -642,12 +805,14 @@
 
   function loadModel(path){
     console.log('Loading model:', path);
-    if (!PIXI.live2d) {
-      showOverlay('未检测到 pixi-live2d-display 库，请检查网络或依赖。')
+    // determine Live2DModel constructor (try window.Live2DModel, then PIXI.live2d)
+    const Live2DModel = (typeof window !== 'undefined' && window.Live2DModel) ? window.Live2DModel : (PIXI && PIXI.live2d && PIXI.live2d.Live2DModel);
+    if (!Live2DModel) {
+      showOverlay('未检测到 pixi-live2d-display 库，请检查网络或依赖。');
       return;
     }
     showOverlay('加载模型: ' + path);
-    PIXI.live2d.Live2DModel.from(path).then(model => {
+    Live2DModel.from(path).then(model => {
       // 移除上个模型
       if (currentModel && currentModel.parent) app.stage.removeChild(currentModel);
       currentModel = model;
@@ -677,10 +842,21 @@
         model.y = pos.y - dragOffset.y;
       });
 
-      // 鼠标悬停时张嘴示意（若模型支持）
-      model.on('mouseover', () => {
-        try{ model.internalModel.motionManager.startRandomMotion('hit_areas'); }catch(e){}
-      });
+      // 官方示例支持的 hit 事件（例如点击 body 区域触发动作）
+      try{
+        model.on && model.on('hit', (hitAreas) => {
+          try{
+            if (Array.isArray(hitAreas) && hitAreas.includes('body')){
+              // prefer high-level API if available
+              if (typeof model.motion === 'function'){
+                model.motion('tap_body');
+              } else if (model.internalModel && model.internalModel.motionManager && typeof model.internalModel.motionManager.startRandomMotion === 'function'){
+                model.internalModel.motionManager.startRandomMotion('hit_areas');
+              }
+            }
+          }catch(e){}
+        });
+      }catch(e){ /* ignore if event not supported */ }
 
       app.stage.addChild(model);
       clearOverlay();
@@ -690,6 +866,18 @@
       applyModelScale();
       // keep reference for mouth sync
       model._faustLive2D = { mouthValue: 0 };
+
+      // ensure model is advanced by PIXI ticker if plugin expects window.PIXI.Ticker
+      try{
+        // some builds auto-register, but ensure update loop
+        if (app && app.ticker && typeof model.update === 'function'){
+          app.ticker.add(()=>{ try{ model.update(); }catch(e){} });
+        }
+      }catch(e){}
+      // probe model for supported expressions and print them
+      try{ probeExpressionsForModel(model); }catch(e){}
+      // also try to read the model3.json next to the path to extract motions
+      try{ probeExpressionsFromModelJson(path); }catch(e){}
     }).catch(err => {
       showOverlay('加载模型失败：' + err);
       console.error(err);
@@ -884,39 +1072,128 @@
 
   // TTS: call backend API (port 5000) to synthesize text and play the returned audio
   async function synthesizeAndPlay(text, lang){
+    // Splits text into chunks and sends parallel TTS requests, playing chunks
+    // progressively as they arrive to reduce latency. Returns a promise that
+    // resolves after all playback has finished.
     if (!text || text.trim().length === 0) return;
+    const TTS_SPLIT_LIMIT = 100; // characters per chunk (tunable)
     const endpoint = (window.location && window.location.hostname) ? `http://${window.location.hostname}:5000/` : 'http://127.0.0.1:5000/';
-    try{
-      if (ttsBtn) ttsBtn.disabled = true;
-      if (ttsStatus) ttsStatus.textContent = '合成中...';
-      const payload = { text: text, text_language: lang || 'zh' };
-      const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      if (!r.ok){
-        const txt = await r.text();
-        showOverlay('TTS服务错误: ' + r.status + ' ' + txt);
-        if (ttsStatus) ttsStatus.textContent = '合成失败';
-        return;
-      }
-      const contentType = r.headers.get('content-type') || 'audio/wav';
-      const ab = await r.arrayBuffer();
-      const blob = new Blob([ab], { type: contentType });
-      // stop any existing audio and play synthesized audio (also start mouth sync)
-      try{ stopAudio(); }catch(e){}
-      startMouthSyncFromFile(blob);
-      if (ttsStatus) ttsStatus.textContent = '播放中';
-      // hook end event to update status
-      try{
-        if (audioEl){
-          audioEl.onended = ()=>{ if (ttsStatus) ttsStatus.textContent = '已完成'; };
+
+    // helper: split text into chunks trying to respect sentence boundaries
+    function splitText(input, maxLen){
+      input = input.trim();
+      const out = [];
+      if (input.length <= maxLen) return [input];
+      // prefer splitting on Chinese/Japanese/English sentence punctuation or commas/space
+      const splitRe = /([。！？!?；;，,，、\n]+)/g;
+      let parts = input.split(splitRe).filter(s=>s && s.trim().length>0);
+      // recombine parts into chunks under maxLen
+      let cur = '';
+      for (let p of parts){
+        if ((cur + p).length <= maxLen){ cur += p; }
+        else {
+          if (cur) out.push(cur);
+          if (p.length > maxLen){
+            // fallback: hard-split long fragment
+            for (let i=0;i<p.length;i+=maxLen){ out.push(p.slice(i,i+maxLen)); }
+            cur = '';
+          } else {
+            cur = p;
+          }
         }
-      }catch(e){}
-    }catch(err){
-      console.error('TTS synth err', err);
-      showOverlay('TTS 错误: ' + String(err));
-      if (ttsStatus) ttsStatus.textContent = '合成失败';
-    }finally{
-      if (ttsBtn) ttsBtn.disabled = false;
+      }
+      if (cur) out.push(cur);
+      // if nothing produced, fallback to naive split
+      if (out.length === 0){
+        for (let i=0;i<input.length;i+=maxLen) out.push(input.slice(i,i+maxLen));
+      }
+      return out;
     }
+
+    // We'll fetch chunks in parallel but play them in original order.
+    // Prepare per-index blobs and waiters so we can start playback as soon
+    // as chunk 0 is ready while later chunks continue downloading.
+    const blobs = new Array();
+    const waiters = new Array();
+    for (let i=0;i<0;i++){} // keep block structure
+
+    function makeWaiter(){
+      let resolveFn = null;
+      const p = new Promise((res)=>{ resolveFn = res; });
+      return { promise: p, resolve: resolveFn };
+    }
+
+    // helper to play a single blob and wait until it finishes
+    function playSingleBlob(blob){
+      return new Promise((resolve)=>{
+        try{ stopAudio(); }catch(e){}
+        startMouthSyncFromFile(blob);
+        if (ttsStatus) ttsStatus.textContent = '播放中';
+        try{
+          if (audioEl && typeof audioEl.addEventListener === 'function'){
+            const onEnd = ()=>{ try{ audioEl.removeEventListener('ended', onEnd); }catch(e){} resolve(); };
+            audioEl.addEventListener('ended', onEnd);
+          } else {
+            const waiter = setInterval(()=>{
+              if (!audioEl || audioEl.ended){ clearInterval(waiter); resolve(); }
+            }, 200);
+          }
+        }catch(e){ console.warn('attach onended failed', e); resolve(); }
+      });
+    }
+
+    // start: split text and issue parallel fetches
+    const chunks = splitText(text, TTS_SPLIT_LIMIT);
+    if (chunks.length === 0) return;
+
+    if (ttsBtn) ttsBtn.disabled = true;
+    if (ttsStatus) ttsStatus.textContent = '合成中...';
+
+    // track fetch completion and playback completion
+    let fetchesPending = chunks.length;
+    let fetchHadError = false;
+
+    // create waiters for each chunk so we can play chunks in order
+    for (let i=0;i<chunks.length;i++){ waiters[i] = makeWaiter(); blobs[i] = null; }
+
+    const fetchPromises = chunks.map((chunk, i) => (async ()=>{
+      const payload = { text: chunk, text_language: lang || 'zh' };
+      try{
+        const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        if (!r.ok){
+          const txt = await r.text();
+          console.warn('TTS chunk failed', r.status, txt);
+          fetchHadError = true;
+        } else {
+          const contentType = r.headers.get('content-type') || 'audio/wav';
+          const ab = await r.arrayBuffer();
+          const blob = new Blob([ab], { type: contentType });
+          blobs[i] = blob;
+        }
+      }catch(err){ console.warn('TTS chunk fetch err', err); fetchHadError = true; }
+      finally{ fetchesPending -= 1; try{ waiters[i].resolve(); }catch(e){} }
+    })());
+
+    try{
+      // play chunks strictly in original order; wait for each chunk's fetch to finish
+      for (let i=0;i<chunks.length;i++){
+        try{ await waiters[i].promise; }catch(e){}
+        if (blobs[i]){
+          await playSingleBlob(blobs[i]);
+        } else {
+          console.warn('Skipping missing TTS chunk', i);
+        }
+      }
+
+      try{ await Promise.all(fetchPromises); }catch(e){}
+      if (fetchHadError) showOverlay('部分 TTS 分段合成失败，已跳过错误片段');
+    }catch(e){ console.warn('TTS allDone err', e); }
+    finally{
+      if (ttsBtn) ttsBtn.disabled = false;
+      if (ttsStatus) ttsStatus.textContent = '已完成';
+    }
+
+    return; // resolved when playback finished
   }
 
   function startMouthSyncFromFile(file){

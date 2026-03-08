@@ -91,6 +91,14 @@ ipcMain.handle('set-ignore-mouse-events', (evt, ignore) => {
   }
 });
 
+// allow renderer to send log messages to main process console
+ipcMain.handle('faust-log', async (evt, msg) => {
+  try{
+    console.log('[renderer]', String(msg));
+  }catch(e){ console.error('faust-log failed', e); }
+  return { ok: true };
+});
+
 app.on('window-all-closed', ()=>{ if (process.platform !== 'darwin') app.quit() });
 
 // Try to load a WebSocket implementation for the main process.
@@ -158,6 +166,3 @@ function startCommandWS(){
 
   doConnect();
 }
-
-// --- Chat WebSocket in main process (optional, falls back to renderer if 'ws' not installed) --
-//保持前台

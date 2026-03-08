@@ -431,7 +431,7 @@ def gui_op(instruction: str)->str:
     print("[Faust.backend.gui_llm_lib]解析后的动作和参数")
     print(f"[Faust.backend.gui_llm_lib]动作: {action}, 参数: {parameters}")
     result_str += "执行结果是: "+execute_gui_action(action, parameters, f"file://{screen_shot_path}")
-    #os.remove(screen_shot_path)
+    os.remove(screen_shot_path)
     return result_str
 if __name__ == "__main__":
     print(gui_op(input("[Faust.backend.gui_llm_lib]请输入您的指令: ")))
