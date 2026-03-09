@@ -14,32 +14,40 @@ from langchain_community.utilities import WikipediaAPIWrapper
 import faust_backend.gui_llm_lib as gui_llm_lib
 import faust_backend.trigger_manager as trigger_manager
 import winsound
+import asyncio
+import faust_backend.events as events
 toollist=[]
 DIARY_DIR="data/faust_diary/"
-HumanInTheLoopConfig={  
-                "pythonExecTool": {  
-                    "allowed_decisions": ["approve", "edit", "reject"]  
-                },
-                "sysExecTool": {  
-                    "allowed_decisions": ["approve", "edit", "reject"]  
-                },
-                "listDirectoryTool": {  
-                    "allowed_decisions": ["approve", "edit", "reject"]  
-                },
-                "readTextFileTool": {  
-                    "allowed_decisions": ["approve", "edit", "reject"]  
-                },
-                "writeTextFileTool": {  
-                    "allowed_decisions": ["approve", "edit", "reject"]  
-                }
-            } 
-
+STARTED=False
 #define add to TOOLLIST wrapper
 def __init__():
     print("[Faust.backend.llm_tools] Initializing llm_tools module...")
 def add_to_tool_list(func):
     toollist.append(func)
     return func
+async def HILRequest(id,title,summary):
+    if not STARTED:
+        return False,"cannot call HILRequest before the system is fully started."
+    backend2frontend.FrontendHIL({"ID": id,"request": title,"summary": summary})
+    events.HIL_feedback_event.clear()
+    events.HIL_feedback_fail_event.clear()
+    ok_callback=asyncio.create_task(events.HIL_feedback_event.wait())
+    fail_callback=asyncio.create_task(events.HIL_feedback_fail_event.wait())
+    timeout_callback=asyncio.create_task(asyncio.sleep(30)) # 30 seconds timeout
+    done,_=await asyncio.wait([ok_callback,fail_callback,timeout_callback],return_when=asyncio.FIRST_COMPLETED)
+    if ok_callback in done:
+        events.HIL_feedback_event.clear()
+        events.HIL_feedback_fail_event.clear()
+        return True,"approved"
+    elif fail_callback in done:
+        events.HIL_feedback_fail_event.clear()
+        events.HIL_feedback_event.clear()
+        return False,"rejected"
+    elif timeout_callback in done:
+        return False,"timeout"
+    else:
+        return False,"unknown"
+    
 @add_to_tool_list
 @tool
 def getDateTimeTool()->str:
@@ -369,6 +377,22 @@ def guiOpTool(command: str) -> str:
 #         return ocr_result
 #     except Exception as e:
 #         return f"获取全屏OCR结果出错: {str(e)}"
+@add_to_tool_list
+@tool
+async def test_HIL_tool():
+    """
+    Description:
+        这是一个测试人类反馈工具的工具。
+        它会向前端发送一个人类反馈请求，并等待用户的批准或拒绝。
+    Args:
+        None
+    Returns:
+        str: 用户的反馈结果，可能是 "approved", "rejected", "timeout" 或 "unknown"。
+    """
+    print("[Faust.backend.llm_tools.test_HIL_tool] Sending human-in-the-loop feedback request.")
+    result=await HILRequest(id="test_request",title="这是一个测试请求",summary="请批准或拒绝这个测试请求。")
+    print("[Faust.backend.llm_tools.test_HIL_tool] Received feedback result:", result)
+    return f"用户反馈结果: {str(result)}"
 if conf.TRIGGER_ENABLED:
     print("[Faust.backend.llm_tools] Trigger system is enabled.")
     @add_to_tool_list
@@ -381,6 +405,8 @@ if conf.TRIGGER_ENABLED:
         Returns:
             str: 触发器列表的字符串表示，或者错误信息。
         """
+        if not STARTED:
+            return "系统尚未完全启动，无法列出触发器。"
         try:
             print("[Faust.backend.llm_tools.triggerListTool] Listing all triggers.")
             
@@ -473,6 +499,8 @@ if conf.TRIGGER_ENABLED:
         Returns:
             str: 添加结果的确认信息，或者错误信息。
         """
+        if not STARTED:
+            return "系统尚未完全启动，无法操作触发器。"
         try:
             print("[Faust.backend.llm_tools.triggerAddTool] Adding new trigger with JSON:", trigger_json)
             trigger_manager.append_trigger(trigger_json)
@@ -490,6 +518,8 @@ if conf.TRIGGER_ENABLED:
         Returns:
             str: 移除结果的确认信息，或者错误信息。
         """
+        if not STARTED:
+            return "系统尚未完全启动，无法操作触发器。"
         try:
             print("[Faust.backend.llm_tools.triggerRemoveTool] Removing trigger with ID:", trigger_id)
 

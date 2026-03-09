@@ -44,3 +44,4 @@ langgraph-checkpoint-sqlite==3.0.3
 qwen-vl-utils==0.0.14
 
 #
+tqdm

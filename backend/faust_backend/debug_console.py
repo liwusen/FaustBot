@@ -71,13 +71,21 @@ def main():
                 break
             if not text:
                 continue
-            if text.lower() in ("exit", "quit"):
+            elif text.lower() in ("exit", "quit"):
                 print("退出中...")
                 break
-            if text.lower().startswith("ws"):
+            elif text.lower().startswith("ws"):
                 requests.post(HTTP_URL.replace("/faust/chat", "/faust/command/forward"), json={"command": text[2:].strip()})
                 print("[INFO] 已通过 /faust/command/forward 转发命令到 WS。")
                 print("[WS COMMAND]", text[2:].strip(),sep="")
+                continue
+            elif text.lower().startswith("hil-accept"):
+                requests.post(HTTP_URL.replace("/faust/chat", "/faust/humanInLoop/feedback"), json={"feedback": True})
+                print("[HIL FEEDBACK]accept", text[3:].strip(),sep="")
+                continue
+            elif text.lower().startswith("hil-reject"):
+                requests.post(HTTP_URL.replace("/faust/chat", "/faust/humanInLoop/feedback"), json={"feedback": False})
+                print("[HIL FEEDBACK]", text[3:].strip(),sep="")
                 continue
             resp = chat_request(text)
             if "reply" in resp:

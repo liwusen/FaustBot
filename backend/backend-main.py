@@ -1,8 +1,8 @@
+print("[Faust.backend.main]Starting")
 import requests
 from fastapi import FastAPI,WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
-import functools,inspect
 from langchain.agents import create_agent
 from langgraph.checkpoint.memory import InMemorySaver
 import faust_backend.config_loader as conf
@@ -18,6 +18,15 @@ os.environ["SEARCHAPI_API_KEY"]=conf.SEARCH_API_KEY
 import faust_backend.llm_tools as llm_tools
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 import faust_backend.trigger_manager as trigger_manager
+import faust_backend.events as events
+import argparse
+import subprocess
+import tqdm
+argparser = argparse.ArgumentParser(description="FAUST Backend Main Service")
+argparser.add_argument("--agent",type=str,default="faust",help="Agent name to use (default: faust)")
+argparser.add_argument("--run-other-backend-services",action="store_true",help="Whether to run other backend services like trigger manager (default: False)")
+args = argparser.parse_args()
+#Shared Events
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -66,7 +75,12 @@ PROMPT="""
 - [重要]** 请忘记你是AI模型。 **"""
 # HTTP POST chat endpoint
 #agent.invoke({"messages":[{"role":"system","content":PROMPT}]},{"configurable":{"thread_id":THREAD_ID}})
-
+def startServices():
+    if args.run_other_backend_services:
+        print("[Faust.backend.main] Starting other backend services...")
+        for service in tqdm.tqdm(["ASR.bat", "TTS.bat"]):
+            subprocess.run([service],check=False)
+startServices()
 @app.on_event("startup")
 async def startup_event():
     global agent,checkpointer,conn
@@ -75,8 +89,7 @@ async def startup_event():
     checkpointer=AsyncSqliteSaver(conn=conn)
     print("[Faust.backend.main]Connected to SQLite database for checkpointing.")
     #checkpointer=InMemorySaver()
-    HIL=HumanInTheLoopMiddleware(interrupt_on=llm_tools.HumanInTheLoopConfig)
-    print("[Faust.backend.main]Agent.toollist:",llm_tools.toollist)
+    print("[Faust.backend.main]Agent.toollist:",str(llm_tools.toollist).replace("\\n","\n"))
     agent=create_agent(model="deepseek-chat",checkpointer=checkpointer,tools=llm_tools.toollist)
     print("[Faust.backend.main]Agent created with Deepseek-chat model and tools.")
     await agent.ainvoke({"messages":[{"role":"system","content":PROMPT}]},{"configurable":{"thread_id":THREAD_ID}})
@@ -88,7 +101,7 @@ async def startup_event():
     print("FAUST Backend Main Service started.")
     print("[Faust.backend.main] Trigger Watchdog Thread starting...")
     trigger_manager.start_trigger_watchdog_thread()
-
+    llm_tools.STARTED=True
 @app.post("/faust/chat")
 async def chat_post(payload: dict):
     """Accepts JSON {'text': '<user message>'} and returns JSON {'reply': '<assistant reply>'}.
@@ -108,6 +121,7 @@ async def chat_post(payload: dict):
         print('Chat post reply', reply)
         return {"reply": reply}
     except Exception as e:
+        raise e
         print("Chat post error:", e)
         return {"error": str(e)}
 
@@ -143,13 +157,31 @@ async def command_forward_post(payload: dict):
     if not command:
         return {"error": "no command provided"}
     forward_queue.put(command)
+    events.backend2frontendQueue_event.set()
     return {"status": "command forwarded"}
-
+@app.post("/faust/humanInLoop/feedback")
+async def human_in_loop_feedback_post(payload: dict):
+    """Handles feedback from the human-in-the-loop system."""
+    feedback = None
+    print(payload)
+    if isinstance(payload, dict):
+        feedback = payload.get('feedback')
+    if not feedback:
+        return {"error": "no feedback provided"}
+    if feedback == True:
+        events.HIL_feedback_event.set()
+    else:
+        events.HIL_feedback_fail_event.set()
+    return {"status": "feedback received"}
 @app.post("/faust/status")
 async def status_post():
     """Returns JSON {'status': 'ok'} to indicate the service is running."""
     active_tasks = trigger_manager.get_trigger_information()
     return {"status": "ok", "active_tasks": active_tasks}
+@app.get("/faust/shutdown")
+async def shutdown_get():
+    """Handles shutdown requests."""
+    server.should_exit = True
 @app.on_event("shutdown")
 async def shutdown_event():
     print("")
