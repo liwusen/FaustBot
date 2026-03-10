@@ -16,8 +16,11 @@
 | ----------- | ------------------------------------------------ | ---- |
 | Minecraft   | 通过一个Mod 在一个完整Minecraft上实现对Agent的操控，保持对其他mod 的兼容性 | 待定   |
 | 原创Live 2d形象 | 无                                                | 待定   |
-
-
+| TTS 歌曲转换    |                                                  |      |
+| MCP 游览器     |                                                  |      |
+| OCR         |                                                  |      |
+| 前端优化        |                                                  |      |
+| 灵动交互        | 允许AI编写HTML实现交互                                   | NOW  |
 
 ---
 
@@ -33,27 +36,7 @@
 
 Backend的一部分代码来源于 [morettt/my-neuro](https://github.com/morettt/my-neuro)
 
-
-
 | 部分       |                                                                       |
 | -------- | --------------------------------------------------------------------- |
 | Backend  | 参考[morettt/my-neuro](https://github.com/morettt/my-neuro),基于langchain |
 | Frontend | Electron                                                              |
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

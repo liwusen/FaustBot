@@ -13,9 +13,11 @@ from faust_backend.searchapi_patched import SearchApiAPIWrapper
 from langchain_community.utilities import WikipediaAPIWrapper
 import faust_backend.gui_llm_lib as gui_llm_lib
 import faust_backend.trigger_manager as trigger_manager
+import faust_backend.nimble as nimble
 import winsound
 import asyncio
 import faust_backend.events as events
+import json
 toollist=[]
 DIARY_DIR="data/faust_diary/"
 STARTED=False
@@ -377,22 +379,160 @@ def guiOpTool(command: str) -> str:
 #         return ocr_result
 #     except Exception as e:
 #         return f"获取全屏OCR结果出错: {str(e)}"
+# @add_to_tool_list
+# @tool
+# async def test_HIL_tool():
+#     """
+#     Description:
+#         这是一个测试人类反馈工具的工具。
+#         它会向前端发送一个人类反馈请求，并等待用户的批准或拒绝。
+#     Args:
+#         None
+#     Returns:
+#         str: 用户的反馈结果，可能是 "approved", "rejected", "timeout" 或 "unknown"。
+#     """
+#     print("[Faust.backend.llm_tools.test_HIL_tool] Sending human-in-the-loop feedback request.")
+#     result=await HILRequest(id="test_request",title="这是一个测试请求",summary="请批准或拒绝这个测试请求。")
+#     print("[Faust.backend.llm_tools.test_HIL_tool] Received feedback result:", result)
+#     return f"用户反馈结果: {str(result)}"
+
 @add_to_tool_list
 @tool
-async def test_HIL_tool():
+def showNimbleWindowTool(html: str, title: str = "灵动交互", recall_text: str = "用户仍在处理这个灵动窗口，请查看用户是否已完成操作。", reminder_interval_seconds: int = 20, lifespan: int = 1800, metadata_json: str = "{}") -> str:
     """
     Description:
-        这是一个测试人类反馈工具的工具。
-        它会向前端发送一个人类反馈请求，并等待用户的批准或拒绝。
+        非阻塞地创建一个“灵动交互”窗口，并显示在前端虚拟形象旁边。
+
+        这是处理复杂任务确认、表单填写、选项确认、安装参数收集等场景的核心工具。
+        调用后不会阻塞当前对话，也不会等待用户立即完成操作。
+        相反，它会：
+        1. 在前端显示一个独立的 HTML 窗口；
+        2. 自动绑定一个 reminder trigger，周期性提醒你关注该窗口；
+        3. 自动绑定一个 result trigger，当用户提交时再次唤醒你；
+        4. 自动绑定一个 expire trigger，窗口生命周期结束时自动关闭；
+        5. 当窗口被用户关闭或提交后，其关联 trigger 会一并删除。
+
+        你应当在如下情况使用它：
+        - 需要用户选择多个选项；
+        - 需要用户填写文本/路径/参数；
+        - 需要用户确认安装、危险操作、批量操作细节；
+        - 纯语音交互效率低、歧义大、确认轮次过多时。
+
+        前端窗口中的 HTML 可以包含自定义 UI 元素，例如：按钮、复选框、输入框、选择器等。
+        你写入的 HTML 中可以直接调用前端注入的 JavaScript API：
+
+        - `window.nimble.submit(data)`
+            向后端提交当前窗口结果，并唤醒你继续处理。
+        - `window.nimble.close(reason)`
+            关闭当前窗口，并清理绑定 trigger。
+
+        这两个 API 会自动关联当前窗口的 callback_id，因此你不需要手动拼接 callback_id。
+
+        HTML 编写建议：
+        - 尽量使用内联样式，避免依赖外部资源；
+        - 明确写出提示语、确认按钮、取消按钮；
+        - 在按钮中调用 `window.nimble.submit({...})` 提交结构化 JSON 结果；
+        - 若用户取消，调用 `window.nimble.close('cancelled')`。
+
+        一个常见示例：
+        ```html
+        <div style="padding:12px; color:#fff;">
+          <h3>安装确认</h3>
+          <label>安装路径 <input id="installPath" value="D:/Apps/Test" /></label>
+          <label><input id="desktopShortcut" type="checkbox" checked /> 创建桌面快捷方式</label>
+          <div style="margin-top:12px; display:flex; gap:8px;">
+            <button onclick="window.nimble.submit({ action: 'confirm', installPath: document.getElementById('installPath').value, desktopShortcut: document.getElementById('desktopShortcut').checked })">确认</button>
+            <button onclick="window.nimble.close('cancelled')">取消</button>
+          </div>
+        </div>
+        ```
+
+        注意：
+        - 这是非阻塞工具。调用后你不应假设用户已经给出答案；
+        - 真正的结果会通过 trigger 在后续再次唤醒你；
+        - 你的后续逻辑应等待由 result/reminder/expire 触发的新上下文，而不是在当前轮强行继续索要结果。
+
     Args:
-        None
+        html (str): 要展示在前端窗口中的 HTML 内容。
+        title (str): 窗口标题。
+        recall_text (str): reminder trigger 唤醒你时附带的提示信息。
+        reminder_interval_seconds (int): 窗口打开期间，提醒你关注该窗口的周期秒数。
+        lifespan (int): 窗口生命周期（秒）。到期后窗口及关联 trigger 自动删除。
+        metadata_json (str): 额外元数据 JSON 字符串。
     Returns:
-        str: 用户的反馈结果，可能是 "approved", "rejected", "timeout" 或 "unknown"。
+        str: 创建结果说明，包含 callback_id。
     """
-    print("[Faust.backend.llm_tools.test_HIL_tool] Sending human-in-the-loop feedback request.")
-    result=await HILRequest(id="test_request",title="这是一个测试请求",summary="请批准或拒绝这个测试请求。")
-    print("[Faust.backend.llm_tools.test_HIL_tool] Received feedback result:", result)
-    return f"用户反馈结果: {str(result)}"
+    if not STARTED:
+        return "系统尚未完全启动，无法创建灵动交互窗口。"
+    try:
+        metadata = json.loads(metadata_json) if metadata_json else {}
+        callback_id = nimble.build_callback_id()
+        session = nimble.create_nimble_session(
+            callback_id,
+            title=title,
+            html=html,
+            recall_text=recall_text,
+            reminder_interval_seconds=reminder_interval_seconds,
+            lifespan=lifespan,
+            metadata=metadata,
+        )
+
+        trigger_manager.append_trigger({
+            "id": session["result_trigger_id"],
+            "type": "event",
+            "event_name": "nimble_result",
+            "callback_id": callback_id,
+            "recall_description": f"灵动窗口 {callback_id} 收到了用户提交结果。",
+            "lifespan": lifespan,
+        })
+        trigger_manager.append_trigger({
+            "id": session["reminder_trigger_id"],
+            "type": "nimble-reminder",
+            "callback_id": callback_id,
+            "interval_seconds": reminder_interval_seconds,
+            "recall_description": recall_text,
+            "lifespan": lifespan,
+        })
+        from datetime import datetime, timedelta
+        trigger_manager.append_trigger({
+            "id": session["expire_trigger_id"],
+            "type": "nimble-expire",
+            "callback_id": callback_id,
+            "target": (datetime.now() + timedelta(seconds=lifespan)).isoformat(),
+            "recall_description": f"灵动窗口 {callback_id} 已过期。",
+            "lifespan": lifespan,
+        })
+        backend2frontend.FrontEndShowNimbleWindow(nimble.export_window_payload(callback_id))
+        return f"灵动交互窗口已创建，callback_id={callback_id}。该窗口为非阻塞式，结果会在后续 trigger 唤醒时返回。"
+    except Exception as e:
+        return f"创建灵动交互窗口失败: {str(e)}"
+
+@add_to_tool_list
+@tool
+def closeNimbleWindowTool(callback_id: str, reason: str = "closed_by_agent") -> str:
+    """
+    Description:
+        主动关闭一个已存在的灵动交互窗口，并清理其关联的 result/reminder/expire trigger。
+        当你确认这个窗口已不再需要，或者任务已经结束、用户已取消时，应调用此工具清理资源。
+    Args:
+        callback_id (str): 需要关闭的灵动窗口 callback_id。
+        reason (str): 关闭原因。
+    Returns:
+        str: 关闭结果。
+    """
+    try:
+        session = nimble.close_nimble_session(callback_id, reason=reason)
+        if not session:
+            return f"未找到 callback_id={callback_id} 对应的灵动窗口。"
+        trigger_manager.delete_trigger(session["result_trigger_id"])
+        trigger_manager.delete_trigger(session["reminder_trigger_id"])
+        trigger_manager.delete_trigger(session["expire_trigger_id"])
+        backend2frontend.FrontEndCloseNimbleWindow({"callback_id": callback_id, "reason": reason})
+        nimble.cleanup_nimble_session(callback_id)
+        return f"灵动窗口已关闭，callback_id={callback_id}"
+    except Exception as e:
+        return f"关闭灵动窗口失败: {str(e)}"
+
 if conf.TRIGGER_ENABLED:
     print("[Faust.backend.llm_tools] Trigger system is enabled.")
     @add_to_tool_list
@@ -428,13 +568,14 @@ if conf.TRIGGER_ENABLED:
             触发器触发时，会唤醒你。
             触发器 JSON 格式说明
 
-            每个 trigger 对象必须满足下列三类之一的模式（多余字段会被拒绝）。
+            每个 trigger 对象必须满足下列几类之一的模式（多余字段会被拒绝）。
 
             通用字段（所有类型）
 
             - id (string) — 触发器唯一标识（用于删除/覆盖）。必须存在且在 store 中唯一。
-            - type (string) — 触发器类型，取值："datetime" | "interval" | "py-eval"
+            - type (string) — 触发器类型，取值："datetime" | "interval" | "py-eval" | "event" | "nimble-reminder" | "nimble-expire"
             - recall_description (string, optional) — 可选的描述/提示，用于回忆或展示
+            - lifespan (int, optional) — 生命周期（秒）。超过后触发器自动删除。
 
             类型一：DateTimeTrigger（一次性时间触发器）
 
@@ -493,6 +634,25 @@ if conf.TRIGGER_ENABLED:
             "recall_description": "磁盘可用空间低于 10GB 时触发"
             }
             ```
+            类型四：EventTrigger（事件触发器）
+
+            - type: "event"
+            - event_name: string（必填）
+            - callback_id: string（可选，nimble 常用）
+            - payload: object（可选）
+
+            类型五：NimbleRemindTrigger（灵动窗口提醒触发器）
+
+            - type: "nimble-reminder"
+            - callback_id: string（必填）
+            - interval_seconds: integer >= 1（必填）
+
+            类型六：NimbleExpireTrigger（灵动窗口过期触发器）
+
+            - type: "nimble-expire"
+            - callback_id: string（必填）
+            - target: datetime 字符串（必填）
+
             请严格遵守上述格式添加触发器，确保字段完整且类型正确。
         Args:
             trigger_json (str): 触发器的JSON字符串表示。
@@ -523,11 +683,8 @@ if conf.TRIGGER_ENABLED:
         try:
             print("[Faust.backend.llm_tools.triggerRemoveTool] Removing trigger with ID:", trigger_id)
 
-            success = trigger_manager.delete_trigger(trigger_id)
-            if success:
-                return f"触发器移除成功，ID: {trigger_id}"
-            else:
-                return f"未找到指定ID的触发器，ID: {trigger_id}"
+            trigger_manager.delete_trigger(trigger_id)
+            return f"触发器移除成功，ID: {trigger_id}"
         except Exception as e:
             return f"移除触发器出错: {str(e)}"
 if __name__ == "__main__":

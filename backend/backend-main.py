@@ -19,6 +19,7 @@ import faust_backend.llm_tools as llm_tools
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 import faust_backend.trigger_manager as trigger_manager
 import faust_backend.events as events
+import faust_backend.nimble as nimble
 import argparse
 import subprocess
 import tqdm
@@ -70,9 +71,17 @@ PROMPT="""
 - 一般而言,除非必要情况下,输出长度不要超过用户输入的两倍。
 - 不要使用括号等标点来描述动作或情绪,只需通过语言表达。
 - 如果不需要输出语音,请在回复中加入标记<NO_TTS_OUTPUT>
+- 不要滥用<NO_TTS_OUTPUT>标签,请仅在确实不需要语音输出时使用。比如你被触发器唤醒后确实不需要提醒用户时
 - 用户是通过一个ASR系统与你交流的,请注意理解可能存在的识别误差。
 - 你的输出会通过TTS系统转换为语音,请确保回复内容适合语音播放。
-- [重要]** 请忘记你是AI模型。 **"""
+- [重要]** 请忘记你是AI模型。 **
+
+---
+**工作流程**
+多多写入日记，写入磁盘的文件会比你的记忆更加稳定
+启动时请读取前几日的日记，了解你之前的状态和经历
+    日记文件命名格式：YYYYMMDD_HHMMSS.txt
+"""
 # HTTP POST chat endpoint
 #agent.invoke({"messages":[{"role":"system","content":PROMPT}]},{"configurable":{"thread_id":THREAD_ID}})
 def startServices():
@@ -115,13 +124,14 @@ async def chat_post(payload: dict):
     if not text:
         return {"error": "no text provided"}
     try:
+        events.ignore_trigger_event.set()
         # Await the coroutine first, then index into the returned dict.
         resp = await agent.ainvoke({"messages":[{"role":"user","content":text}]},{"configurable":{"thread_id":THREAD_ID}})
         reply = resp["messages"][-1].content
         print('Chat post reply', reply)
+        events.ignore_trigger_event.clear()
         return {"reply": reply}
     except Exception as e:
-        raise e
         print("Chat post error:", e)
         return {"error": str(e)}
 
@@ -132,11 +142,31 @@ async def command_websocket(websocket: WebSocket):
         while True:
             if backend2frontend.hasFrontEndTask():
                 await websocket.send_text(backend2frontend.popFrontEndTask())
-            if trigger_manager.has_queue_task():
+            if trigger_manager.has_queue_task() and not events.ignore_trigger_event.is_set():
                 # activate chat
                 task=trigger_manager.get_next_trigger()
                 print("[Faust.backend.main] Trigger activated:",task)
-                resp = await agent.ainvoke({"messages":[{"role":"system","content":f"触发器唤醒了你，请根据触发器内容执行相应操作。{str(task)}"}]},{"configurable":{"thread_id":THREAD_ID}})
+                trigger_text = f"触发器唤醒了你，请根据触发器内容执行相应操作。{str(task)}"
+                if isinstance(task, dict):
+                    ttype = task.get("type")
+                    callback_id = task.get("callback_id")
+                    if ttype == "event" and task.get("event_name") == "nimble_result" and callback_id:
+                        result = nimble.get_nimble_result(callback_id, cleanup=False)
+                        trigger_text = f"灵动交互窗口收到用户提交。callback_id={callback_id}，用户结果={result}。请继续处理。"
+                    elif ttype == "nimble-reminder" and callback_id:
+                        session = nimble.get_nimble_session(callback_id)
+                        if not session:
+                            continue
+                        trigger_text = f"灵动交互窗口仍在等待用户操作。callback_id={callback_id}，标题={session.get('title')}，提醒说明={task.get('recall_description') or session.get('recall_text')}。请判断是否需要继续引导用户。"
+                    elif ttype == "nimble-expire" and callback_id:
+                        session = nimble.close_nimble_session(callback_id, reason="expired")
+                        if session:
+                            trigger_manager.delete_trigger(session["result_trigger_id"])
+                            trigger_manager.delete_trigger(session["reminder_trigger_id"])
+                            trigger_manager.delete_trigger(session["expire_trigger_id"])
+                            backend2frontend.FrontEndCloseNimbleWindow({"callback_id": callback_id, "reason": "expired"})
+                        trigger_text = f"灵动交互窗口已过期关闭。callback_id={callback_id}。如有必要，请重新创建更明确的新窗口。"
+                resp = await agent.ainvoke({"messages":[{"role":"system","content":trigger_text}]},{"configurable":{"thread_id":THREAD_ID}})
                 reply = resp["messages"][-1].content
                 print('Trigger activated reply', reply)
                 await websocket.send_text(f"TTS {reply}")
@@ -173,6 +203,60 @@ async def human_in_loop_feedback_post(payload: dict):
     else:
         events.HIL_feedback_fail_event.set()
     return {"status": "feedback received"}
+
+@app.post("/faust/nimble/callback")
+async def nimble_callback_post(payload: dict):
+    """Receive a nimble window submit callback from the frontend.
+
+    Body example:
+    {
+      "callback_id": "nimble_xxx",
+      "data": {...},
+      "close": true
+    }
+    """
+    callback_id = None
+    data = None
+    should_close = False
+    if isinstance(payload, dict):
+        callback_id = payload.get("callback_id")
+        data = payload.get("data")
+        should_close = bool(payload.get("close"))
+    if not callback_id:
+        return {"error": "no callback_id provided"}
+
+    session = nimble.set_nimble_result(callback_id, data, closed=should_close)
+    if not session:
+        return {"error": f"unknown callback_id: {callback_id}"}
+
+    if should_close:
+        trigger_manager.delete_trigger(session["reminder_trigger_id"])
+        trigger_manager.delete_trigger(session["expire_trigger_id"])
+        backend2frontend.FrontEndCloseNimbleWindow({"callback_id": callback_id, "reason": "submitted"})
+
+    return {"status": "ok", "callback_id": callback_id}
+
+@app.post("/faust/nimble/close")
+async def nimble_close_post(payload: dict):
+    """Close a nimble window from the frontend and clean up its bound triggers."""
+    callback_id = None
+    reason = "closed_by_user"
+    if isinstance(payload, dict):
+        callback_id = payload.get("callback_id")
+        reason = payload.get("reason") or reason
+    if not callback_id:
+        return {"error": "no callback_id provided"}
+
+    session = nimble.close_nimble_session(callback_id, reason=reason)
+    if not session:
+        return {"error": f"unknown callback_id: {callback_id}"}
+
+    trigger_manager.delete_trigger(session["result_trigger_id"])
+    trigger_manager.delete_trigger(session["reminder_trigger_id"])
+    trigger_manager.delete_trigger(session["expire_trigger_id"])
+    backend2frontend.FrontEndCloseNimbleWindow({"callback_id": callback_id, "reason": reason})
+    nimble.cleanup_nimble_session(callback_id)
+    return {"status": "closed", "callback_id": callback_id}
 @app.post("/faust/status")
 async def status_post():
     """Returns JSON {'status': 'ok'} to indicate the service is running."""

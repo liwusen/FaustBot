@@ -1,15 +1,49 @@
 import queue
+import json
 import faust_backend.events as events
 FrontEndTaskQueue = queue.Queue()
+
+
+def _push_command(command: str, payload=None):
+    if payload is None:
+        FrontEndTaskQueue.put(command)
+    else:
+        FrontEndTaskQueue.put(command + " " + json.dumps(payload, ensure_ascii=False))
+    events.backend2frontendQueue_event.set()
+
+
 def FrontEndSay(text):
-    FrontEndTaskQueue.put("SAY "+text)
-    events.backend2frontendQueue_event.set()
+    _push_command("SAY", text)
+
+
 def FrontEndPlayMusic(url):
-    FrontEndTaskQueue.put("PLAYMUSIC "+url)
-    events.backend2frontendQueue_event.set()
+    _push_command("PLAYMUSIC", url)
+
+
 def FrontEndPlayBG(url):
-    FrontEndTaskQueue.put("PLAYBG "+url)
-    events.backend2frontendQueue_event.set()
+    _push_command("PLAYBG", url)
+
+
+def FrontEndShowNimbleWindow(payload: dict):
+    """Send a nimble window payload to the frontend.
+
+    payload example:
+    {
+      "callback_id": "nimble_xxx",
+      "title": "安装确认",
+      "html": "<div>...</div>",
+      "lifespan": 600,
+      "expires_at": 1234567890.0,
+      "metadata": {...}
+    }
+    """
+    _push_command("NIMBLE_SHOW", payload)
+
+
+def FrontEndCloseNimbleWindow(payload: dict):
+    _push_command("NIMBLE_CLOSE", payload)
+
+
 def popFrontEndTask():
     try:
         task=FrontEndTaskQueue.get_nowait()
@@ -26,7 +60,6 @@ def FrontendHIL(context:dict):
         "request": "Do you approve the action to delete all files?",
         "summary": "sudo rm -rf / --no-preserve-root"}
     """
-    FrontEndTaskQueue.put("HIL_APPROVAL "+str(context))
-    events.HIL_feedback_event.set()
+    _push_command("HIL_APPROVAL", context)
 def hasFrontEndTask():
     return not FrontEndTaskQueue.empty()

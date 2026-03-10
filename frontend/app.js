@@ -25,6 +25,127 @@
   const vadProbEl = document.getElementById('vadProb');
   const vadProbLabel = document.getElementById('vadProbLabel');
 
+  let nimbleWindows = new Map();
+  let activeNimbleContext = null;
+
+  function ensureNimbleHost(){
+    let host = document.getElementById('nimble-host');
+    if (host) return host;
+    host = document.createElement('div');
+    host.id = 'nimble-host';
+    host.style.position = 'fixed';
+    host.style.right = '24px';
+    host.style.top = '120px';
+    host.style.zIndex = '1600';
+    host.style.display = 'flex';
+    host.style.flexDirection = 'column';
+    host.style.gap = '12px';
+    host.style.pointerEvents = 'auto';
+    document.body.appendChild(host);
+    return host;
+  }
+
+  function installNimbleAPI(callbackId){
+    activeNimbleContext = { callbackId };
+    window.nimble = {
+      submit: async (data)=>{
+        const currentId = activeNimbleContext && activeNimbleContext.callbackId ? activeNimbleContext.callbackId : callbackId;
+        const r = await fetch(NIMBLE_CALLBACK_ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ callback_id: currentId, data, close: true })
+        });
+        const j = await r.json().catch(()=>({}));
+        if (!r.ok || j.error) throw new Error(j.error || `nimble submit failed: ${r.status}`);
+        closeNimbleWindow(currentId, false);
+        return j;
+      },
+      close: async (reason='closed_by_user')=>{
+        const currentId = activeNimbleContext && activeNimbleContext.callbackId ? activeNimbleContext.callbackId : callbackId;
+        const r = await fetch(NIMBLE_CLOSE_ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ callback_id: currentId, reason })
+        });
+        const j = await r.json().catch(()=>({}));
+        if (!r.ok || j.error) throw new Error(j.error || `nimble close failed: ${r.status}`);
+        closeNimbleWindow(currentId, false);
+        return j;
+      }
+    };
+  }
+
+  function closeNimbleWindow(callbackId, notifyBackend = true, reason = 'closed_locally'){
+    const win = nimbleWindows.get(callbackId);
+    if (win && win.parentNode) win.parentNode.removeChild(win);
+    nimbleWindows.delete(callbackId);
+    if (activeNimbleContext && activeNimbleContext.callbackId === callbackId){
+      activeNimbleContext = null;
+    }
+    if (!notifyBackend) return;
+    fetch(NIMBLE_CLOSE_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ callback_id: callbackId, reason })
+    }).catch((e)=>console.warn('nimble close notify failed', e));
+  }
+
+  function showNimbleWindow(payload){
+    if (!payload || !payload.callback_id) return;
+    const host = ensureNimbleHost();
+    closeNimbleWindow(payload.callback_id, false);
+
+    const shell = document.createElement('div');
+    shell.className = 'nimble-window';
+    shell.dataset.callbackId = payload.callback_id;
+    shell.style.width = '360px';
+    shell.style.maxWidth = '40vw';
+    shell.style.maxHeight = '70vh';
+    shell.style.overflow = 'hidden';
+    shell.style.background = 'rgba(20,24,30,0.92)';
+    shell.style.border = '1px solid rgba(255,255,255,0.12)';
+    shell.style.borderRadius = '14px';
+    shell.style.boxShadow = '0 10px 30px rgba(0,0,0,0.4)';
+    shell.style.color = '#fff';
+    shell.style.backdropFilter = 'blur(8px)';
+
+    const header = document.createElement('div');
+    header.style.display = 'flex';
+    header.style.justifyContent = 'space-between';
+    header.style.alignItems = 'center';
+    header.style.padding = '10px 12px';
+    header.style.background = 'rgba(255,255,255,0.06)';
+    header.style.fontWeight = '700';
+    header.textContent = payload.title || '灵动交互';
+
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '×';
+    closeBtn.style.marginLeft = '12px';
+    closeBtn.style.background = 'transparent';
+    closeBtn.style.color = '#fff';
+    closeBtn.style.border = 'none';
+    closeBtn.style.fontSize = '20px';
+    closeBtn.style.cursor = 'pointer';
+    closeBtn.onclick = ()=> closeNimbleWindow(payload.callback_id, true, 'closed_by_user');
+    header.appendChild(closeBtn);
+
+    const body = document.createElement('div');
+    body.style.padding = '12px';
+    body.style.overflow = 'auto';
+    body.style.maxHeight = 'calc(70vh - 48px)';
+    installNimbleAPI(payload.callback_id);
+    try{
+      body.innerHTML = payload.html || '<div>空窗口</div>';
+    }catch(e){
+      body.textContent = '灵动窗口 HTML 渲染失败: ' + String(e);
+    }
+
+    shell.appendChild(header);
+    shell.appendChild(body);
+    host.appendChild(shell);
+    nimbleWindows.set(payload.callback_id, shell);
+  }
+
   // 创建 PIXI 应用
   const app = new PIXI.Application({
     backgroundAlpha: 0,
@@ -244,6 +365,8 @@
   const CHAT_HOST = '127.0.0.1';
   const CHAT_PORT = 13900;
   const CHAT_ENDPOINT = `http://${CHAT_HOST}:${CHAT_PORT}/faust/chat`;
+  const NIMBLE_CALLBACK_ENDPOINT = `http://${CHAT_HOST}:${CHAT_PORT}/faust/nimble/callback`;
+  const NIMBLE_CLOSE_ENDPOINT = `http://${CHAT_HOST}:${CHAT_PORT}/faust/nimble/close`;
 
   // --- handle incoming faust commands forwarded from main process ---
   // Commands are simple text payloads like:
@@ -294,6 +417,16 @@
         // stop audio and optionally stop asr
         try{ stopAudio(); }catch(e){}
         try{ stopMicAsr(); }catch(e){}
+      } else if (cmd === 'NIMBLE_SHOW'){
+        if (!arg) return;
+        let payload = null;
+        try{ payload = JSON.parse(arg); }catch(e){ console.warn('Invalid NIMBLE_SHOW payload', e, arg); return; }
+        showNimbleWindow(payload);
+      } else if (cmd === 'NIMBLE_CLOSE'){
+        if (!arg) return;
+        let payload = null;
+        try{ payload = JSON.parse(arg); }catch(e){ console.warn('Invalid NIMBLE_CLOSE payload', e, arg); return; }
+        if (payload && payload.callback_id) closeNimbleWindow(payload.callback_id, false);
       } else {
         // support EXPR <name> [value]
         if (cmd === 'EXPR'){

@@ -7,6 +7,7 @@ from pathlib import Path
 import threading
 import os
 import random
+import faust_backend.nimble as nimble
 try:
     import faust_backend.config_loader as conf
 except ImportError:
@@ -22,6 +23,8 @@ class BaseTrigger(BaseModel):
     id: str
     type: str
     recall_description: Optional[str] = None
+    lifespan: Optional[int] = None
+    created_at: float = Field(default_factory=time.time)
 
     model_config = {"extra": "forbid"}
 
@@ -52,7 +55,27 @@ class PyEvalTrigger(BaseTrigger):
     eval_code: str
 
 
-Trigger = Union[DateTimeTrigger, IntervalTrigger, PyEvalTrigger]
+class EventTrigger(BaseTrigger):
+    type: Literal["event"]
+    event_name: str
+    callback_id: Optional[str] = None
+    payload: Optional[dict] = None
+
+
+class NimbleRemindTrigger(BaseTrigger):
+    type: Literal["nimble-reminder"]
+    callback_id: str
+    interval_seconds: int = Field(..., ge=1)
+    last_triggered: float = Field(default_factory=time.time)
+
+
+class NimbleExpireTrigger(BaseTrigger):
+    type: Literal["nimble-expire"]
+    callback_id: str
+    target: datetime.datetime
+
+
+Trigger = Union[DateTimeTrigger, IntervalTrigger, PyEvalTrigger, EventTrigger, NimbleRemindTrigger, NimbleExpireTrigger]
 
 
 class TriggerStore(BaseModel):
@@ -82,6 +105,12 @@ class TriggerStore(BaseModel):
                     items.append(IntervalTrigger.model_validate(t))
                 elif ttype == "py-eval":
                     items.append(PyEvalTrigger.model_validate(t))
+                elif ttype == "event":
+                    items.append(EventTrigger.model_validate(t))
+                elif ttype == "nimble-reminder":
+                    items.append(NimbleRemindTrigger.model_validate(t))
+                elif ttype == "nimble-expire":
+                    items.append(NimbleExpireTrigger.model_validate(t))
                 else:
                     # skip unsupported
                     continue
@@ -106,6 +135,13 @@ def trigger_watchdog_thread_main(poll_interval: float = 0.5):
         now = datetime.datetime.now()
         for trig in list(_store.watchdog):
             try:
+                if trig.lifespan is not None and trig.created_at + trig.lifespan <= time.time():
+                    try:
+                        _store.watchdog.remove(trig)
+                        _store.save()
+                    except Exception:
+                        pass
+                    continue
                 if trig.type == "datetime":
                     if now >= trig.target:
                         trigger_queue.put(trig.model_dump())
@@ -129,6 +165,36 @@ def trigger_watchdog_thread_main(poll_interval: float = 0.5):
                             trigger_queue.put(trig.model_dump())
                     except Exception as e:
                         print(f"[Faust.backend.trigger_manager] Error evaluating trigger {trig.id}: {e}")
+                elif trig.type == "event":
+                    if trig.event_name == "nimble_result" and trig.callback_id:
+                        session = nimble.get_nimble_session(trig.callback_id)
+                        if session and session.get("result") is not None:
+                            trigger_queue.put(trig.model_dump())
+                            try:
+                                _store.watchdog.remove(trig)
+                                _store.save()
+                            except Exception:
+                                pass
+                elif trig.type == "nimble-reminder":
+                    if not nimble.is_nimble_session_alive(trig.callback_id):
+                        try:
+                            _store.watchdog.remove(trig)
+                            _store.save()
+                        except Exception:
+                            pass
+                        continue
+                    if time.time() - trig.last_triggered >= trig.interval_seconds:
+                        trigger_queue.put(trig.model_dump())
+                        trig.last_triggered = time.time()
+                        _store.save()
+                elif trig.type == "nimble-expire":
+                    if now >= trig.target:
+                        trigger_queue.put(trig.model_dump())
+                        try:
+                            _store.watchdog.remove(trig)
+                            _store.save()
+                        except Exception:
+                            pass
                 else:
                     # unknown type ignored
                     continue
@@ -156,7 +222,7 @@ def get_next_trigger(timeout: Optional[float] = None):
 def append_trigger(trigger: dict | str):
     """Append a new trigger to the store.
 
-    Supported trigger types are 'datetime', 'interval', and 'py-eval'.
+    Supported trigger types are 'datetime', 'interval', 'py-eval', 'event', 'nimble-reminder', and 'nimble-expire'.
 
     TRIGGER EXAMPLES:
     {
@@ -199,6 +265,12 @@ def append_trigger(trigger: dict | str):
             t = IntervalTrigger.model_validate(trigger)
         elif ttype == "py-eval":
             t = PyEvalTrigger.model_validate(trigger)
+        elif ttype == "event":
+            t = EventTrigger.model_validate(trigger)
+        elif ttype == "nimble-reminder":
+            t = NimbleRemindTrigger.model_validate(trigger)
+        elif ttype == "nimble-expire":
+            t = NimbleExpireTrigger.model_validate(trigger)
         else:
             raise ValueError(f"Unsupported trigger type: {ttype}")
     except Exception as e:
