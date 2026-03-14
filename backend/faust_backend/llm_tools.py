@@ -18,14 +18,21 @@ import winsound
 import asyncio
 import faust_backend.events as events
 import json
+from pathlib import Path
 toollist=[]
-DIARY_DIR="data/faust_diary/"
+DIARY_DIR=Path("agents") / Path(conf.AGENT_NAME) / "diary" 
 STARTED=False
+ORIGINAL_TOOL_FUNCS={}
 #define add to TOOLLIST wrapper
 def __init__():
     print("[Faust.backend.llm_tools] Initializing llm_tools module...")
 def add_to_tool_list(func):
     toollist.append(func)
+    return func
+def record_func_name(func):
+    func_name=func.__name__
+    ORIGINAL_TOOL_FUNCS[func_name]=func
+    print(f"[Faust.backend.llm_tools] Registered tool: {func_name}")
     return func
 async def HILRequest(id,title,summary):
     if not STARTED:
@@ -50,8 +57,9 @@ async def HILRequest(id,title,summary):
     else:
         return False,"unknown"
     
-@add_to_tool_list
-@tool
+@add_to_tool_list#记录最终TOOL
+@tool#把函数注册为工具，供LLM调用
+@record_func_name#记录原始函数，方便后续调用和管理
 def getDateTimeTool()->str:
     """
     Description:
@@ -66,6 +74,7 @@ def getDateTimeTool()->str:
     return now.strftime("%Y-%m-%d %H:%M:%S")
 @add_to_tool_list
 @tool
+@record_func_name
 def userHostNameTool()->str:
     """
     Description:
@@ -85,6 +94,7 @@ def userHostNameTool()->str:
     return str({"hostname": hostname,"username":username,"ip":ip,"os_type":os_type})
 @add_to_tool_list
 @tool
+@record_func_name
 def pythonExecTool(code: str) -> str:
     """
     Description:
@@ -113,6 +123,7 @@ def pythonExecTool(code: str) -> str:
         return f"代码执行出错: {str(e)}"
 @add_to_tool_list
 @tool
+@record_func_name
 def sysExecTool(command: str) -> str:
     """
     Description:
@@ -132,6 +143,7 @@ def sysExecTool(command: str) -> str:
         return f"命令执行出错: {str(e)}"
 @add_to_tool_list
 @tool
+@record_func_name
 def listDiaryFilesTool() -> str:
     """
     Description:
@@ -151,6 +163,7 @@ def listDiaryFilesTool() -> str:
         return f"列出日记文件出错: {str(e)}"
 @add_to_tool_list
 @tool
+@record_func_name
 def readDiaryFileTool(filename: str) -> str:
     """
     Description:
@@ -171,6 +184,7 @@ def readDiaryFileTool(filename: str) -> str:
         return f"读取日记文件出错: {str(e)}"
 @add_to_tool_list
 @tool
+@record_func_name
 def writeDiaryFileTool(content: str) -> str:
     """
     Description:
@@ -196,6 +210,7 @@ def writeDiaryFileTool(content: str) -> str:
 
 @add_to_tool_list
 @tool
+@record_func_name
 def listDirectoryTool(path: str) -> str:
     """
     Description:
@@ -221,6 +236,7 @@ def listDirectoryTool(path: str) -> str:
         return f"列出目录出错: {str(e)}"
 @add_to_tool_list
 @tool
+@record_func_name
 def readTextFileTool(file_path: str) -> str:
     """
     Description:
@@ -242,6 +258,7 @@ def readTextFileTool(file_path: str) -> str:
         return f"读取文件出错: {str(e)}"
 @add_to_tool_list
 @tool
+@record_func_name
 def writeTextFileTool(file_path: str, content: str) -> str:
     """
     Description:
@@ -265,6 +282,7 @@ def writeTextFileTool(file_path: str, content: str) -> str:
 swrapper=SearchApiAPIWrapper()
 @add_to_tool_list
 @tool
+@record_func_name
 def webSearchTool(query: str) -> str:
     """
     Description:
@@ -279,6 +297,7 @@ def webSearchTool(query: str) -> str:
 wwrapper=WikipediaAPIWrapper()
 @add_to_tool_list
 @tool
+@record_func_name
 def wikiSearchTool(query: str) -> str:
     """
     Description:
@@ -293,6 +312,7 @@ def wikiSearchTool(query: str) -> str:
 
 @add_to_tool_list
 @tool
+@record_func_name
 def beepTool(frequency: int, duration: int) -> str:
     """
     Description:
@@ -311,6 +331,7 @@ def beepTool(frequency: int, duration: int) -> str:
         return "蜂鸣声工具仅在Windows系统上可用。"
 @add_to_tool_list
 @tool
+@record_func_name
 def musicPlayTool(url: str) -> str:
     """
     Description:
@@ -327,6 +348,7 @@ def musicPlayTool(url: str) -> str:
     return "音乐播放命令已发送到前端。"
 @add_to_tool_list
 @tool
+@record_func_name
 def bgPlayTool(url: str) -> str:
     """
     Description:
@@ -343,6 +365,7 @@ def bgPlayTool(url: str) -> str:
     return "背景音乐播放命令已发送到前端。"
 @add_to_tool_list
 @tool
+@record_func_name
 def guiOpTool(command: str) -> str:
     """
     Description:
@@ -398,6 +421,7 @@ def guiOpTool(command: str) -> str:
 
 @add_to_tool_list
 @tool
+@record_func_name
 def showNimbleWindowTool(html: str, title: str = "灵动交互", recall_text: str = "用户仍在处理这个灵动窗口，请查看用户是否已完成操作。", reminder_interval_seconds: int = 20, lifespan: int = 1800, metadata_json: str = "{}") -> str:
     """
     Description:
@@ -510,6 +534,7 @@ def showNimbleWindowTool(html: str, title: str = "灵动交互", recall_text: st
 
 @add_to_tool_list
 @tool
+@record_func_name
 def closeNimbleWindowTool(callback_id: str, reason: str = "closed_by_agent") -> str:
     """
     Description:
@@ -537,6 +562,7 @@ def closeNimbleWindowTool(callback_id: str, reason: str = "closed_by_agent") -> 
 
 @add_to_tool_list
 @tool
+@record_func_name
 def triggerListTool() -> str:
     """
     Description:
@@ -561,6 +587,7 @@ def triggerListTool() -> str:
         return f"列出触发器出错: {str(e)}"
 @add_to_tool_list
 @tool
+@record_func_name
 def triggerAddTool(trigger_json: str) -> str:
     """
     Description:
@@ -669,6 +696,7 @@ def triggerAddTool(trigger_json: str) -> str:
         return f"添加触发器出错: {str(e)}"
 @add_to_tool_list
 @tool
+@record_func_name
 def triggerRemoveTool(trigger_id: str) -> str:
     """
     Description:

@@ -14,10 +14,9 @@ except ImportError:
     import config_loader as conf
 from pydantic import BaseModel, Field, field_validator
 
-TRIGGERS_FILE = Path(conf.DATA_ROOT) / "triggers.json"
+TRIGGERS_FILE = Path("agents") / Path(conf.AGENT_NAME) / "triggers.json"
 exitflag=False
 trigger_queue: "queue.Queue[dict]" = queue.Queue()
-
 
 class BaseTrigger(BaseModel):
     id: str

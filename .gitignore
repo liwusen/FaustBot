@@ -19,3 +19,4 @@ tts-hub/
 *.private.json
 faust_checkpoint.db
 faust_checkpoint.db*
+diary/

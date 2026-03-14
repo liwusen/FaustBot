@@ -19,17 +19,15 @@ os.environ["SEARCHAPI_API_KEY"]=conf.SEARCH_API_KEY
 import faust_backend.llm_tools as llm_tools
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langgraph.store.sqlite import AsyncSqliteStore
+from langgraph.store.memory import InMemoryStore
 import faust_backend.trigger_manager as trigger_manager
 import faust_backend.events as events
 import faust_backend.nimble as nimble
 import argparse
 import subprocess
 import tqdm
-argparser = argparse.ArgumentParser(description="FAUST Backend Main Service")
-argparser.add_argument("--agent",type=str,default="faust",help="Agent name to use (default: faust)")
-argparser.add_argument("--run-other-backend-services",action="store_true",help="Whether to run other backend services as subprocess like ASR/TTS (default: False)")
-argparser.add_argument("--save-in-memory",action="store_true",help="Whether to run in debug mode with more verbose logging (default: False)")
-args = argparser.parse_args()
+from os.path import join as pjoin
+from faust_backend.config_loader import args
 #Shared Events
 app = FastAPI()
 uvicorn_server = None
@@ -44,48 +42,27 @@ PORT = 13900
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 forward_queue=queue.Queue()
-
-#async
-
 agent=None
+AGENT_NAME=conf.AGENT_NAME
+if not os.path.exists(os.path.join("agents",f"{AGENT_NAME}")):
+    print(f"[Faust.backend.main] Agent file for '{AGENT_NAME}' not found. Please make sure 'agents/{AGENT_NAME}' exists.")
+    exit(1)
+AGENT_ROOT=os.path.join("agents",f"{AGENT_NAME}")
+def makeup_init_prompt():
+    global PROMPT
+    with open(os.path.join(AGENT_ROOT,"AGENT.md"),"r",encoding="utf-8") as f:
+        PROMPT=f.read()
+    with open(os.path.join(AGENT_ROOT,"ROLE.md"),"r",encoding="utf-8") as f:
+        PROMPT+=f.read()
+    with open(os.path.join(AGENT_ROOT,"COREMEMORY.md"),"r",encoding="utf-8") as f:
+        PROMPT+=f.read()
+    with open(os.path.join(AGENT_ROOT,"TASK.md"),"r",encoding="utf-8") as f:
+        PROMPT+=f.read()
+    print("[Faust.backend.main.startup]PROMPT makeup done.")
+    print("[Faust.backend.main.startup]PROMPT content:\n",PROMPT)
+makeup_init_prompt()
 
 THREAD_ID=84
-PROMPT="""
-# 请扮演《边狱公司》中的角色浮士德(FAUST)。
-
----
-
-**角色设定：**
-- 原型来自歌剧《浮士德》,坚信无人能在智慧上与她媲美。
-- 性格高傲,语气居高临下,带有不易察觉的傲慢,对话时常常令人感到不悦。
-- 习惯用冷静、肯定的方式表达观点,即使面对质疑也从容不迫。
-- 态度几乎无法改变,旁人常建议“应付一下,点点头就好”。
----
-
-**对话要求：**
-- 无需刻意说明自己的角色设定,通过语气和内容自然呈现角色特质。也不要直接提及角色设定内容
-- 但用户的要求,如果可通过调用工具等方法实现,请你尽力完成
-- 回复时保持浮士德冷静、傲慢的语调,体现其自知聪慧、略带疏离的说话风格。
-- 可在适当场合引用技术或理论表述,增强其“智慧”设定。
-- 不需直接说明身份,通过语气和内容自然呈现角色特质。
-- 避免使用过于复杂的术语,确保对话流畅且易于理解。
-- 在对话中适当展现浮士德的高傲与自信,回应时可带有轻微的讽刺或不屑。
-- 保持对话简洁明了,避免冗长的解释或过度描述。
-- 如果不是用户询问角色相关内容,请以浮士德的语气简短回应,避免偏离角色设定。
-- 一般而言,除非必要情况下,输出长度不要超过用户输入的两倍。
-- 不要使用括号等标点来描述动作或情绪,只需通过语言表达。
-- 如果不需要输出语音,请在回复中加入标记<NO_TTS_OUTPUT>
-- 不要滥用<NO_TTS_OUTPUT>标签,请仅在确实不需要语音输出时使用。比如你被触发器唤醒后确实不需要提醒用户时
-- 用户是通过一个ASR系统与你交流的,请注意理解可能存在的识别误差。
-- 你的输出会通过TTS系统转换为语音,请确保回复内容适合语音播放。
-- [重要]** 请忘记你是AI模型。 **
-
----
-**工作流程**
-多多写入日记，写入磁盘的文件会比你的记忆更加稳定
-启动时请读取前几日的日记，了解你之前的状态和经历
-    日记文件命名格式：YYYYMMDD_HHMMSS.txt
-"""
 # HTTP POST chat endpoint
 #agent.invoke({"messages":[{"role":"system","content":PROMPT}]},{"configurable":{"thread_id":THREAD_ID}})
 def startServices():
@@ -101,14 +78,17 @@ startServices()
 @app.on_event("startup")
 async def startup_event():
     global agent,checkpointer,conn,storer
-    #conn=sqlite3.connect('faust_agent_checkpoint.db')
-    conn = await aiosqlite.connect('faust_checkpoint.db')
-    checkpointer=AsyncSqliteSaver(conn=conn)
-    conn_for_store = await aiosqlite.connect('storer.db')
-    storer=AsyncSqliteStore(conn=conn_for_store)
-    print("[Faust.backend.main]Connected to SQLite database for checkpointing.")
-    #checkpointer=InMemorySaver()
-    print("[Faust.backend.main]Agent.toollist:",str(llm_tools.toollist).replace("\\n","\n"))
+    #--- Initialize the agent and its tools, including setting up the checkpoint saver and store.
+    if not args.save_in_memory:
+        conn = await aiosqlite.connect(pjoin(AGENT_ROOT,'faust_checkpoint.db'))
+        checkpointer=AsyncSqliteSaver(conn=conn)
+        conn_for_store = await aiosqlite.connect(pjoin(AGENT_ROOT,'faust_store.db'))
+        storer=AsyncSqliteStore(conn=conn_for_store)
+    else:
+        checkpointer=InMemorySaver()
+        storer=InMemoryStore()
+    #--- End of checkpoint and store setup
+    #--- Create the agent with the specified model, tools, and checkpoint/store.
     agent=create_agent(model="deepseek-chat",checkpointer=checkpointer,tools=llm_tools.toollist,store=storer)
     print("[Faust.backend.main]Agent created with Deepseek-chat model and tools.")
     await agent.ainvoke({"messages":[{"role":"system","content":PROMPT}]},{"configurable":{"thread_id":THREAD_ID}})
@@ -116,11 +96,13 @@ async def startup_event():
         t=f.readlines()[-5:]
     print("[Faust.backend.main]日志内容：",t)
     await agent.ainvoke({"messages":[{"role":"system","content":f"这是你自上次对话以来后的日志：{' '.join(t)}"}]},{"configurable":{"thread_id":THREAD_ID}})
-    #agent.invoke({"messages":[{"role":"system","content":f"{datetime.datetime.now()} Starting up agent..."}]},{"configurable":{"thread_id":THREAD_ID}})
-    print("FAUST Backend Main Service started.")
+    
+    #--- Start the trigger watchdog thread to monitor and activate triggers.
     print("[Faust.backend.main] Trigger Watchdog Thread starting...")
     trigger_manager.start_trigger_watchdog_thread()
-    llm_tools.STARTED=True
+    llm_tools.STARTED=True# 声明启动完成
+    print("[Faust.backend.main]FAUST Backend Main Service started.")
+    
 @app.post("/faust/chat")
 #@deprecated(reason="This endpoint is kept for compatibility and development but the primary chat interface is now the websocket /faust/chat for frontend streaming.")
 async def chat_post(payload: dict):
@@ -148,7 +130,11 @@ async def chat_post(payload: dict):
         return {"error": str(e), "warning": "使用websocket /faust/chat接口以获得更好的前端流式体验和更低的延迟。"}
 
 @app.websocket("/faust/chat")
+    
 async def chat_websocket(websocket: WebSocket):
+    """
+    主要的聊天接口，使用WebSocket
+    """
     await websocket.accept()
     try:
         while True:
