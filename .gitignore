@@ -20,3 +20,5 @@ tts-hub/
 faust_checkpoint.db
 faust_checkpoint.db*
 diary/
+#---frontend-live2d-models/
+frontend/2D/

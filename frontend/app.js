@@ -2,6 +2,7 @@
 
 // 简单的 Live2D 展示 demo，依赖 PIXI 和 pixi-live2d-display
 (() => {
+
   const defaultModel = '2D/hiyori_pro_mic.model3.json';
 
   const modelPathInput = document.getElementById('modelPath');
@@ -27,7 +28,7 @@
   const textChatInput = document.getElementById('textChatInput');
   const textChatSendBtn = document.getElementById('textChatSendBtn');
   const textChatStatus = document.getElementById('textChatStatus');
-
+  let Live2DModel=null;
   let nimbleWindows = new Map();
   let activeNimbleContext = null;
   let textChatSending = false;
@@ -160,7 +161,6 @@
 
   document.getElementById('app').appendChild(app.view);
 
-  // expose PIXI globally so external plugins / examples can access PIXI and Ticker
   try{ window.PIXI = PIXI; }catch(e){/* ignore in non-browser env */}
 
   let currentModel = null;
@@ -175,9 +175,8 @@
     if (!currentModel) return;
     try{
       const s = Math.max(0.1, baseScale * scaleFactor);
-      if (typeof currentModel.scale.set === 'function') currentModel.scale.set(s);
-      else currentModel.scale = { x: s, y: s };
-    }catch(e){/*ignore*/}
+      currentModel.scale.set(s);
+    }catch(e){console.warn('applyModelScale err', e);}
   }
 
   function loadSavedModelState(){
@@ -188,7 +187,9 @@
       const modelPath = (modelPathInput && modelPathInput.value) ? modelPathInput.value.trim() : defaultModel;
       if (st.modelPath && st.modelPath === modelPath){
         if (typeof st.x === 'number') currentModel.x = st.x;
+        else console.warn('Saved model state missing x coordinate');
         if (typeof st.y === 'number') currentModel.y = st.y;
+        else console.warn('Saved model state missing y coordinate');
         if (typeof st.scaleFactor === 'number'){
           scaleFactor = st.scaleFactor;
           if (modelScaleSlider){
@@ -438,7 +439,11 @@
         let payload = null;
         try{ payload = JSON.parse(arg); }catch(e){ console.warn('Invalid NIMBLE_CLOSE payload', e, arg); return; }
         if (payload && payload.callback_id) closeNimbleWindow(payload.callback_id, false);
-      } else {
+      } else if (cmd=="SET_MOTION"){
+        if (!arg) return;
+        Live2DModel.motion(arg);
+      }
+      else {
         console.warn('Unknown faust command', raw);
       }
     }catch(e){ console.error('handleFaustCommand error', e); }
@@ -983,7 +988,7 @@
   function loadModel(path){
     console.log('Loading model:', path);
     // determine Live2DModel constructor (try window.Live2DModel, then PIXI.live2d)
-    const Live2DModel = (typeof window !== 'undefined' && window.Live2DModel) ? window.Live2DModel : (PIXI && PIXI.live2d && PIXI.live2d.Live2DModel);
+    Live2DModel = (typeof window !== 'undefined' && window.Live2DModel) ? window.Live2DModel : (PIXI && PIXI.live2d && PIXI.live2d.Live2DModel);
     if (!Live2DModel) {
       showOverlay('未检测到 pixi-live2d-display 库，请检查网络或依赖。');
       return;
@@ -1023,14 +1028,7 @@
       try{
         model.on && model.on('hit', (hitAreas) => {
           try{
-            if (Array.isArray(hitAreas) && hitAreas.includes('body')){
-              // prefer high-level API if available
-              if (typeof model.motion === 'function'){
-                model.motion('tap_body');
-              } else if (model.internalModel && model.internalModel.motionManager && typeof model.internalModel.motionManager.startRandomMotion === 'function'){
-                model.internalModel.motionManager.startRandomMotion('hit_areas');
-              }
-            }
+            model.motion('tap_body');
           }catch(e){}
         });
       }catch(e){ /* ignore if event not supported */ }

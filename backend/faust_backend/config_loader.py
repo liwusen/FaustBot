@@ -27,12 +27,17 @@ with open(CONFIG_FILE_P_PATH, 'r', encoding='utf-8') as f:
     DEEPSEEK_API_KEY = private_config.get('DEEPSEEK_API_KEY', '')
     SEARCH_API_KEY = private_config.get('SEARCH_API_KEY', '')
     GUI_OPERATOR_LLM_KEY = private_config.get('GUI_OPERATOR_LLM_KEY', '')
+    SERCURITY_VERIFIER_LLM_KEY = private_config.get('SECURITY_VERIFIER_LLM_KEY', '')
 with open(CONFIG_FILE_PATH, 'r', encoding='utf-8') as f:
     config = json.load(f)
     GUI_OPERATOR_LLM_MODEL = config.get('GUI_OPERATOR_LLM_MODEL', 'gui-plus')
     GUI_OPERATOR_LLM_BASE = config.get('GUI_OPERATOR_LLM_BASE', 'https://www.dmxapi.cn/v1/chat/completions')
     PT_EVAL_TRIGGER_ENABLED=config.get('PY_EVAL_TRIGGER_ENABLED', False)
     AGENT_NAME=config.get('AGENT_NAME', 'faust')
+    SECURITY_VERIFIER_LLM_API_ENDPOINT = config.get('SECURITY_VERIFIER_API_ENDPOINT', 'https://www.dmxapi.cn/v1')
+    SECURITY_VERIFIER_LLM_MODEL = config.get('SECURITY_VERIFIER_LLM_MODEL', 'qwen3.5-flash')
+    SECURITY_SYS_ENABLED = config.get('SECURITY_SYS_ENABLED', False)
+    
 def print_globals():
     print("Current Global Configuration Variables Of Faust:")
     for k, v in globals().items():

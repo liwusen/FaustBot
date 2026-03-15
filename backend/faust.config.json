@@ -1,5 +1,8 @@
 {
     "GUI_OPERATOR_LLM_MODEL": "gui-plus",
     "GUI_OPERATOR_LLM_BASE": "https://www.dmxapi.cn/v1/chat/completions",
-    "AGENT_NAME": "faust"
+    "AGENT_NAME": "faust",
+    "SECURITY_VERIFIER_API_ENDPOINT": "https://www.dmxapi.cn/v1",
+    "SECURITY_VERIFIER_LLM_MODEL": "qwen3.5-flash",
+    "SECURITY_SYS_ENABLED": false
 }

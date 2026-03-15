@@ -75,3 +75,19 @@ body.controls-hidden #controls {
 }
 #vadProb::-webkit-progress-value { background: linear-gradient(90deg,#4caf50,#ff9800); }
 #vadProbLabel { font-weight:600; }
+#asrText {
+  position:absolute; 
+  left:0; 
+  top:0; 
+  z-index:2000; 
+  pointer-events:none; 
+  display:none; 
+  background: rgba(0,0,0,0.6); 
+  color:#fff; 
+  padding:6px 8px; 
+  border-radius:6px; 
+  font-weight:600; 
+  font-size:20px; 
+  line-height:1; 
+  max-width: 15%;
+}
