@@ -7,3 +7,10 @@ HIL_feedback_event = asyncio.Event()
 HIL_feedback_fail_event= asyncio.Event()
 
 ignore_trigger_event = asyncio.Event()
+
+feedback_event_pool={}
+def create_feedback_event(feedback_id):
+    """Creates a new asyncio.Event for a specific feedback ID and stores it in the feedback_event_pool."""
+    event = asyncio.Event()
+    feedback_event_pool[feedback_id] = event
+    return event

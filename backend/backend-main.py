@@ -17,7 +17,7 @@ import queue
 os.environ["DEEPSEEK_API_KEY"]=conf.DEEPSEEK_API_KEY
 os.environ["SEARCHAPI_API_KEY"]=conf.SEARCH_API_KEY
 import faust_backend.llm_tools as llm_tools
-from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langchain.agents.middleware import HumanInTheLoopMiddleware,SummarizationMiddleware,TodoListMiddleware
 from langgraph.store.sqlite import AsyncSqliteStore
 from langgraph.store.memory import InMemoryStore
 import faust_backend.trigger_manager as trigger_manager
@@ -40,7 +40,7 @@ app.add_middleware(
 )
 PORT = 13900
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
-
+backend2frontend.frontendGetMotions()
 forward_queue=queue.Queue()
 agent=None
 AGENT_NAME=conf.AGENT_NAME
@@ -78,7 +78,11 @@ startServices()
 @app.on_event("startup")
 async def startup_event():
     global agent,checkpointer,conn,storer
-    #--- Initialize the agent and its tools, including setting up the checkpoint saver and store.
+    #--- Initialize the agent and its tools&middleware, including setting up the checkpoint saver and store.
+    if not os.path.exists(pjoin(AGENT_ROOT,'faust_checkpoint.db')):
+        NOT_INITIALIZED = True
+    else:
+        NOT_INITIALIZED = False
     if not args.save_in_memory:
         conn = await aiosqlite.connect(pjoin(AGENT_ROOT,'faust_checkpoint.db'))
         checkpointer=AsyncSqliteSaver(conn=conn)
@@ -87,15 +91,20 @@ async def startup_event():
     else:
         checkpointer=InMemorySaver()
         storer=InMemoryStore()
-    #--- End of checkpoint and store setup
+    middlewares=[]
+    middlewares.append(TodoListMiddleware())
+    #--- End of checkpoint middleware and store setup
     #--- Create the agent with the specified model, tools, and checkpoint/store.
-    agent=create_agent(model="deepseek-chat",checkpointer=checkpointer,tools=llm_tools.toollist,store=storer)
+    agent=create_agent(model="deepseek-chat",checkpointer=checkpointer,tools=llm_tools.toollist,store=storer,middleware=middlewares)
     print("[Faust.backend.main]Agent created with Deepseek-chat model and tools.")
-    await agent.ainvoke({"messages":[{"role":"system","content":PROMPT}]},{"configurable":{"thread_id":THREAD_ID}})
+    if NOT_INITIALIZED:
+        await agent.ainvoke({"messages":[{"role":"system","content":PROMPT}]},{"configurable":{"thread_id":THREAD_ID}})
+    else:
+        await agent.ainvoke({"messages":[{"role":"user","content":"对话重新开始了"}]},{"configurable":{"thread_id":THREAD_ID}})
     with open("faust_main.log","r",encoding="utf-8") as f:
         t=f.readlines()[-5:]
     print("[Faust.backend.main]日志内容：",t)
-    await agent.ainvoke({"messages":[{"role":"system","content":f"这是你自上次对话以来后的日志：{' '.join(t)}"}]},{"configurable":{"thread_id":THREAD_ID}})
+    await agent.ainvoke({"messages":[{"role":"user","content":f"这是你自上次对话以来后的日志：{' '.join(t)}"}]},{"configurable":{"thread_id":THREAD_ID}})
     
     #--- Start the trigger watchdog thread to monitor and activate triggers.
     print("[Faust.backend.main] Trigger Watchdog Thread starting...")
@@ -273,7 +282,20 @@ async def nimble_callback_post(payload: dict):
         backend2frontend.FrontEndCloseNimbleWindow({"callback_id": callback_id, "reason": "submitted"})
 
     return {"status": "ok", "callback_id": callback_id}
-
+@app.post("/faust/command/feedback")
+async def command_feedback_post(payload: dict):
+    """Handles feedback for commands from the frontend."""
+    command_id = None
+    feedback = None
+    if isinstance(payload, dict):
+        command_id = payload.get("command_id")
+        feedback = payload.get("feedback")
+    if not command_id:
+        return {"error": "no command_id provided"}
+    print(f"Received feedback for command {command_id}: {feedback}")
+    if feedback_event := events.feedback_event_pool.get(command_id):
+        feedback_event.set()
+    return {"status": "feedback received", "command_id": command_id}
 @app.post("/faust/nimble/close")
 async def nimble_close_post(payload: dict):
     """Close a nimble window from the frontend and clean up its bound triggers."""
