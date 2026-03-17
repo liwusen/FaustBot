@@ -9,20 +9,28 @@ from faust_backend.utils import *
 import functools,inspect,os,sys
 import socket
 import io
+import datetime
 from faust_backend.searchapi_patched import SearchApiAPIWrapper
 from langchain_community.utilities import WikipediaAPIWrapper
 import faust_backend.gui_llm_lib as gui_llm_lib
 import faust_backend.trigger_manager as trigger_manager
 import faust_backend.nimble as nimble
+import faust_backend.rag_client as rag_client
 import winsound
 import asyncio
 import faust_backend.events as events
 import json
+import threading
+import time
+import uuid
 from pathlib import Path
 toollist=[]
 DIARY_DIR=Path("agents") / Path(conf.AGENT_NAME) / "diary" 
 STARTED=False
 ORIGINAL_TOOL_FUNCS={}
+RAG_ASYNC_RESULTS: dict[str, dict] = {}
+RAG_ASYNC_LOCK = threading.Lock()
+RAG_TRACKER = rag_client.docTracker()
 #define add to TOOLLIST wrapper
 def __init__():
     print("[Faust.backend.llm_tools] Initializing llm_tools module...")
@@ -34,6 +42,72 @@ def record_func_name(func):
     ORIGINAL_TOOL_FUNCS[func_name]=func
     print(f"[Faust.backend.llm_tools] Registered tool: {func_name}")
     return func
+
+
+def _store_rag_async_result(callback_id: str, data: dict) -> None:
+    with RAG_ASYNC_LOCK:
+        RAG_ASYNC_RESULTS[callback_id] = data
+
+
+def _get_rag_async_result(callback_id: str) -> dict | None:
+    with RAG_ASYNC_LOCK:
+        return RAG_ASYNC_RESULTS.get(callback_id)
+
+
+def _run_async_in_thread(coro) -> None:
+    def runner():
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(coro)
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
+
+    threading.Thread(target=runner, daemon=True).start()
+
+
+async def _rag_query_async_job(callback_id: str, query: str, mode: str, only_need_context: bool) -> None:
+    started_at = time.time()
+    try:
+        result = await rag_client.rag_query(
+            query,
+            mode=mode,
+            only_need_context=only_need_context,
+            enable_rerank=False,
+        )
+        payload = {
+            "status": "done",
+            "callback_id": callback_id,
+            "query": query,
+            "mode": mode,
+            "only_need_context": only_need_context,
+            "result": result,
+            "started_at": started_at,
+            "finished_at": time.time(),
+        }
+    except Exception as e:
+        payload = {
+            "status": "error",
+            "callback_id": callback_id,
+            "query": query,
+            "mode": mode,
+            "only_need_context": only_need_context,
+            "error": str(e),
+            "started_at": started_at,
+            "finished_at": time.time(),
+        }
+
+    _store_rag_async_result(callback_id, payload)
+    trigger_manager.append_trigger({
+        "id": f"rag_async_result_{callback_id}",
+        "type": "datetime",
+        "target": datetime.datetime.now().isoformat(),
+        "recall_description": f"RAG 异步查询已完成。请使用 ragQueryAsyncGetTool 获取结果，callback_id={callback_id}",
+        "lifespan": 600,
+    })
 async def HILRequest(id,title,summary):
     if not STARTED:
         return False,"cannot call HILRequest before the system is fully started."
@@ -710,6 +784,103 @@ def triggerRemoveTool(trigger_id: str) -> str:
         return f"触发器移除成功，ID: {trigger_id}"
     except Exception as e:
         return f"移除触发器出错: {str(e)}"
+
+
+@add_to_tool_list
+@tool
+@record_func_name
+def ragQueryTool(query: str, mode: str = "hybrid", only_need_context: bool = True) -> str:
+    """
+    Description:
+        同步（阻塞式）执行一次 RAG 查询(查询目标：你的对话记录和相关文档)，并直接返回结果。
+        默认只返回检索到的相关内容，不让模型总结。
+        本工具会接入文档管理器，用于确保 RAG 文档跟踪器已初始化并可用。
+        解释：文档管理器
+            
+    Args:
+        query (str): 要查询的问题或关键词。
+        mode (str): 检索模式，可选 naive/local/global/hybrid/mix。
+        only_need_context (bool): 是否只返回检索上下文。默认 True。
+    Returns:
+        str: RAG 查询结果，或错误信息。
+    """
+    try:
+        _ = RAG_TRACKER
+        return asyncio.run(
+            rag_client.rag_query(
+                query,
+                mode=mode,
+                only_need_context=only_need_context,
+                enable_rerank=False,
+            )
+        )
+    except Exception as e:
+        return f"RAG 同步查询失败: {str(e)}"
+
+
+@add_to_tool_list
+@tool
+@record_func_name
+def ragQueryAsyncStartTool(query: str, mode: str = "hybrid", only_need_context: bool = True) -> str:
+    """
+    Description:
+        启动一个异步 RAG 查询任务，立即返回 rag_callback_id，不阻塞当前对话。
+        查询完成后会通过 Trigger System 再次唤醒你。
+        被唤醒后，请调用 ragQueryAsyncGetTool(callback_id) 获取实际查询结果。
+        默认只返回检索到的相关内容，不让模型总结。
+    Args:
+        query (str): 要查询的问题或关键词。
+        mode (str): 检索模式，可选 naive/local/global/hybrid/mix。
+        only_need_context (bool): 是否只返回检索上下文。默认 True。
+    Returns:
+        str: 启动结果说明，包含 rag_callback_id。
+    """
+    try:
+        _ = RAG_TRACKER
+        callback_id = f"ragcb_{uuid.uuid4().hex}"
+        _store_rag_async_result(callback_id, {
+            "status": "running",
+            "callback_id": callback_id,
+            "query": query,
+            "mode": mode,
+            "only_need_context": only_need_context,
+            "started_at": time.time(),
+        })
+        _run_async_in_thread(_rag_query_async_job(callback_id, query, mode, only_need_context))
+        return (
+            f"RAG 异步查询已启动，rag_callback_id={callback_id}。"
+            f"完成后会通过 Trigger System 唤醒你；届时请调用 ragQueryAsyncGetTool 获取结果。"
+        )
+    except Exception as e:
+        return f"启动 RAG 异步查询失败: {str(e)}"
+
+
+@add_to_tool_list
+@tool
+@record_func_name
+def ragQueryAsyncGetTool(rag_callback_id: str) -> str:
+    """
+    Description:
+        获取一个已启动的异步 RAG 查询结果。
+        当 ragQueryAsyncStartTool 启动异步查询后，会先返回 rag_callback_id；
+        查询完成并通过 trigger 唤醒你后，请使用本工具按 callback_id 获取结果。
+    Args:
+        rag_callback_id (str): 异步 RAG 查询的回调 ID。
+    Returns:
+        str: 查询结果、运行中状态或错误信息。
+    """
+    try:
+        result = _get_rag_async_result(rag_callback_id)
+        if result is None:
+            return f"未找到 rag_callback_id={rag_callback_id} 对应的异步查询任务。"
+        status = result.get("status", "unknown")
+        if status == "running":
+            return f"RAG 异步查询仍在运行中，rag_callback_id={rag_callback_id}。请稍后再试。"
+        if status == "error":
+            return f"RAG 异步查询失败，rag_callback_id={rag_callback_id}，错误：{result.get('error', 'unknown error')}"
+        return str(result.get("result", ""))
+    except Exception as e:
+        return f"获取 RAG 异步查询结果失败: {str(e)}"
 if __name__ == "__main__":
     for tool in toollist:
         print(f"Tool name: {tool.name},\nDescription: {tool.description}")

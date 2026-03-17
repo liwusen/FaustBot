@@ -79,7 +79,8 @@ if args.MOO:
 ___________|_|_|_____________
 ..."Have you mooed today?"...""")
     print(random.choice(LIST))
-    print("[Faust.backend.config_loarder]Apt-get:MOO!")
+    print("[Faust.backend.config_loader]Apt-get:MOO!")
     sys.exit(325)
+AGENT_ROOT=p_join(CONFIG_ROOT, "agents", AGENT_NAME)
 if __name__=="__main__":
     print_globals()

@@ -4,5 +4,6 @@
     "AGENT_NAME": "faust",
     "SECURITY_VERIFIER_API_ENDPOINT": "https://www.dmxapi.cn/v1",
     "SECURITY_VERIFIER_LLM_MODEL": "qwen3.5-flash",
-    "SECURITY_SYS_ENABLED": false
+    "SECURITY_SYS_ENABLED": false,
+    "RAG_ENABLED": true
 }
