@@ -11,7 +11,20 @@ except ImportError:
 import aiohttp
 import pathlib
 import time
+from aiohttp import ClientResponseError
 DEFAULT_RAG_BASE_URL = "http://127.0.0.1:18080"
+import fnmatch
+import os
+
+
+def _ensure_text_payload(text: str) -> str:
+    if not isinstance(text, str):
+        raise TypeError(f"RAG 插入内容必须是字符串，当前类型: {type(text).__name__}")
+    normalized = text.strip()
+    if not normalized:
+        raise ValueError("RAG 插入内容不能为空字符串")
+    return normalized
+
 
 class docTracker():
     """
@@ -74,21 +87,27 @@ class docTracker():
         if to_delete:
             self._save_to_file()
     async def declareUpdateDoc(self,file_path:str,dry_run:bool=False):
+        # make sure file_path is absolute
+        file_path = str(Path(file_path).resolve())
         now_time = time.time()
         file_text = Path(file_path).read_text(encoding="utf-8")
         md5 = hashlib.md5(Path(file_path).read_bytes()).hexdigest()
         if file_path in self.doc_info_map:
             doc_info = self.doc_info_map[file_path]
+            current_doc_id = doc_info.doc_id
             if doc_info.md5 != md5:
-                doc_info.doc_id = pathlib.Path(file_path).name+"_"+str(int(now_time))
+                new_doc_id = pathlib.Path(file_path).name+"_"+str(int(now_time))
                 doc_info.file_path = file_path
                 doc_info.md5 = md5
                 doc_info.update_time = now_time
-            if not dry_run:
-                await rag_delete_document(doc_info.doc_id)
-                await rag_insert_document(file_text, doc_id=doc_info.doc_id, file_path=file_path)
+                if not dry_run:
+                    await rag_delete_document(current_doc_id)
+                    await rag_insert_document(file_text, doc_id=new_doc_id, file_path=file_path)
+                doc_info.doc_id = new_doc_id
                 if self.verbosity:
                     print(f"[RAG Tracker] Updated document for {file_path} with doc_id {doc_info.doc_id}")
+            elif self.verbosity:
+                print(f"[RAG Tracker] Skipped unchanged document for {file_path} with doc_id {doc_info.doc_id}")
         else:
             new_doc_id = pathlib.Path(file_path).name+"_"+str(int(now_time))
             self.doc_info_map[file_path] = docTracker.DocInfo(new_doc_id, file_path, md5, now_time, now_time)
@@ -97,6 +116,29 @@ class docTracker():
             if self.verbosity:
                 print(f"[RAG Tracker] Inserted new document for {file_path} with doc_id {self.doc_info_map[file_path].doc_id}")
         self._save_to_file()
+    def is_tracked(self,file_path:str)->bool:
+        file_path = str(Path(file_path).resolve())
+        return file_path in self.doc_info_map
+    def untrack_doc(self,file_path:str):
+        file_path = str(Path(file_path).resolve())
+        if file_path in self.doc_info_map:
+            doc_id = self.doc_info_map[file_path].doc_id
+            asyncio.run(rag_delete_document(doc_id))
+            del self.doc_info_map[file_path]
+            self._save_to_file()
+            if self.verbosity:
+                print(f"[RAG Tracker] Untracked document for {file_path} with doc_id {doc_id}")
+        else:
+            if self.verbosity:
+                print(f"[RAG Tracker] No document to untrack for {file_path}")
+    async def recursive_track_dir(self,dir_path:str,allowed_suffixes:list[str]=[".md",".txt"],blacklist_fnmatch_pattern:str=None):
+        dir_path = str(Path(dir_path).resolve())
+        for path in Path(dir_path).rglob("*"):
+            if path.is_file():
+                if allowed_suffixes is None or \
+                    path.suffix in allowed_suffixes and \
+                    (blacklist_fnmatch_pattern is None or not fnmatch.fnmatch(str(path), blacklist_fnmatch_pattern)):
+                    await self.declareUpdateDoc(str(path))
     async def new_chat_history_part(self,text):
         now_time = time.time()
         await rag_insert_document(text, doc_id="__CHAT_HISTORY__"+(doc_id:=str(int(now_time))), file_path="__MEM__")
@@ -153,7 +195,7 @@ async def rag_health(base_url: str = DEFAULT_RAG_BASE_URL) -> Dict[str, Any]:
 
 
 async def rag_insert(text: str, base_url: str = DEFAULT_RAG_BASE_URL) -> Dict[str, Any]:
-    return await _json_request("POST", f"{base_url}/insert", {"text": text})
+    return await _json_request("POST", f"{base_url}/insert", {"text": _ensure_text_payload(text)})
 
 
 async def rag_insert_document(
@@ -163,7 +205,7 @@ async def rag_insert_document(
     doc_id: str | None = None,
     file_path: str | None = None,
 ) -> Dict[str, Any]:
-    payload: Dict[str, Any] = {"text": text}
+    payload: Dict[str, Any] = {"text": _ensure_text_payload(text)}
     if doc_id is not None:
         payload["doc_id"] = doc_id
     if file_path is not None:
@@ -180,7 +222,17 @@ async def rag_get_documents_by_track_id(track_id: str, base_url: str = DEFAULT_R
 
 
 async def rag_delete_document(doc_id: str, base_url: str = DEFAULT_RAG_BASE_URL) -> Dict[str, Any]:
-    return await _json_request("DELETE", f"{base_url}/documents/{doc_id}")
+    try:
+        return await _json_request("DELETE", f"{base_url}/documents/{doc_id}")
+    except ClientResponseError as exc:
+        if exc.status == 404:
+            return {
+                "status": "not_found",
+                "doc_id": doc_id,
+                "message": "文档不存在，已视为删除完成",
+                "file_path": None,
+            }
+        raise
 
 
 async def rag_config(
@@ -204,10 +256,18 @@ async def rag_config(
     clean_payload = {k: v for k, v in payload.items() if v is not None}
     return await _json_request("POST", f"{base_url}/config", clean_payload)
 
+async def rag_set_agent_id(agent_name:str, base_url: str = DEFAULT_RAG_BASE_URL)->Dict[str,Any]:
+    payload = {
+        "agent_name": agent_name
+    }
+    return await _json_request("POST", f"{base_url}/agent", payload)
 
+
+async def rag_get_agent(base_url: str = DEFAULT_RAG_BASE_URL) -> Dict[str, Any]:
+    return await _json_request("GET", f"{base_url}/agent")
 async def rag_query(
     query: str,
-    mode: str = "hybrid",
+    mode: str = "naive",
     *,
     base_url: str = DEFAULT_RAG_BASE_URL,
     only_need_context: bool = False,
@@ -226,21 +286,53 @@ async def rag_query(
         },
     )
     return str(payload.get("answer", ""))
-async def demo():
-    print("Checking RAG health...")
-    health = await rag_health()
-    print("RAG Health:", health)
+async def demo(basic_test:bool=False):
+    if basic_test:
+        print("Checking RAG health...")
+        health = await rag_health()
+        print("RAG Health:", health)
 
-    print("\nInserting text into RAG...")
-    insert_result = await rag_insert_document("这是一些测试文本，用于验证 RAG 的插入功能。")
-    print("Insert Result:", insert_result)
+        print("\nInserting text into RAG...")
+        insert_result = await rag_insert_document("这是一些测试文本，用于验证 RAG 的插入功能。")
+        print("Insert Result:", insert_result)
 
-    print("\nListing RAG documents...")
-    documents = await rag_list_documents()
-    print("Documents:", documents)
+        print("\nListing RAG documents...")
+        documents = await rag_list_documents()
+        print("Documents:", documents)
 
-    print("\nQuerying RAG context directly...")
-    answer = await rag_query("测试文本是什么？", only_need_context=True)
-    print("RAG Answer:", answer)
+        print("\nQuerying RAG context directly...")
+        answer = await rag_query("测试文本是什么？", only_need_context=True)
+        print("RAG Answer:", answer)
+    await rag_set_agent_id("__DOC_TRACKER_TEST__")
+
+    test_doc_tracker = docTracker()
+    os.remove(test_doc_tracker.datafile) if Path(test_doc_tracker.datafile).exists() else None
+    os.remove(test_doc_tracker.mem_record_file) if Path(test_doc_tracker.mem_record_file).exists() else None
+    docTracker._load_from_file(test_doc_tracker)
+    test_doc_tracker.verbosity = True
+    print("\nTesting docTracker with test.md...")
+    with open("test.md", "w", encoding="utf-8") as f:
+        f.write("# 测试文档\n这是一个测试文档，用于验证 docTracker 的功能。\n FaustBot-llm-vtuber 是一个桌宠,它可以陪伴在你的电脑桌面，与你进行自然语言的交流互动。它可以回答你的问题，提供信息，讲笑话，甚至可以根据你的喜好定制个性化的对话内容。无论你是需要一个虚拟的朋友，还是想要一个智能助手，FaustBot-llm-vtuber 都能满足你的需求。")
+    print("RAG result before tracking:", await rag_query("陪伴在桌面", only_need_context=True))#这里不应该搜索到结果
+    await test_doc_tracker.declareUpdateDoc("./test.md")
+    print("\n没有修改文件内容，重复 declareUpdateDoc不应该更新文档...")
+    await test_doc_tracker.declareUpdateDoc("./test.md")
+    print("\nTesting docTracker with test.md...")
+    print("RAG result:", await rag_query("陪伴在桌面", only_need_context=True))
+    with open("test.md", "w", encoding="utf-8") as f:
+        f.write("# 测试文档\n这是一个测试文档，用于验证 docTracker 的功能。")
+    await test_doc_tracker.declareUpdateDoc("./test.md")
+    print("\nTesting docTracker with test.md...")
+    print("RAG result:", await rag_query("陪伴在桌面", only_need_context=True))#这里不应该搜索到结果
+    os.remove("test.md")
+    await test_doc_tracker.clear_not_exist_docs()
+
+
+    docTracker.new_chat_history_part("这是第一条聊天记录。")
+    docTracker.new_chat_history_part("这是第二条聊天记录。")
+    docTracker.new_chat_history_part("这是第三条聊天记录。")
+
+    print("\nTesting chat history tracking...")
+    print("RAG result for '聊天记录':", await rag_query("聊天记录", only_need_context=True))
 if __name__ == "__main__":
     asyncio.run(demo())
