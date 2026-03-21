@@ -27,3 +27,5 @@ inputs/
 __dev__/
 rag_storage/
 lightRAG.log
+
+package-lock.json

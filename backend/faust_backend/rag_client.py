@@ -34,6 +34,11 @@ class docTracker():
         如果md5变化，自动更新关联的文档ID和文件路径，确保RAG中的文档与实际文件保持一致。
     """
     class DocInfo:
+        doc_id:str
+        file_path:str
+        md5:str
+        create_time:float
+        update_time:float
         def __init__(self, doc_id: str, file_path: str, md5: str, create_time: float, update_time: float):
             self.doc_id = doc_id
             self.file_path = file_path

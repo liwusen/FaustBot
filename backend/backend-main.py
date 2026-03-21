@@ -1,4 +1,4 @@
-print("[Faust.backend.main]Starting")
+print("[main]Starting")
 import requests
 from fastapi import FastAPI,WebSocket, WebSocketDisconnect
 import json
@@ -23,6 +23,7 @@ from langgraph.store.memory import InMemoryStore
 import faust_backend.trigger_manager as trigger_manager
 import faust_backend.events as events
 import faust_backend.nimble as nimble
+import faust_backend.minecraft_client as minecraft_client
 import argparse
 import subprocess
 import tqdm
@@ -43,9 +44,10 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))
 backend2frontend.frontendGetMotions()
 forward_queue=queue.Queue()
 agent=None
+agent_lock = asyncio.Lock()
 AGENT_NAME=conf.AGENT_NAME
 if not os.path.exists(os.path.join("agents",f"{AGENT_NAME}")):
-    print(f"[Faust.backend.main] Agent file for '{AGENT_NAME}' not found. Please make sure 'agents/{AGENT_NAME}' exists.")
+    print(f"[main] Agent file for '{AGENT_NAME}' not found. Please make sure 'agents/{AGENT_NAME}' exists.")
     exit(1)
 AGENT_ROOT=os.path.join("agents",f"{AGENT_NAME}")
 def makeup_init_prompt():
@@ -58,8 +60,8 @@ def makeup_init_prompt():
         PROMPT+=f.read()
     with open(os.path.join(AGENT_ROOT,"TASK.md"),"r",encoding="utf-8") as f:
         PROMPT+=f.read()
-    print("[Faust.backend.main.startup]PROMPT makeup done.")
-    print("[Faust.backend.main.startup]PROMPT content:\n",PROMPT)
+    print("[main.startup]PROMPT makeup done.")
+    print("[main.startup]PROMPT content:\n",PROMPT)
 makeup_init_prompt()
 
 THREAD_ID=84
@@ -67,25 +69,27 @@ THREAD_ID=84
 #agent.invoke({"messages":[{"role":"system","content":PROMPT}]},{"configurable":{"thread_id":THREAD_ID}})
 def startServices():
     if args.run_other_backend_services:
-        print("[Faust.backend.main] Starting other backend services...")
+        print("[main] Starting other backend services...")
         for service in tqdm.tqdm(["ASR.bat", "TTS.bat"]):
-            print("[Faust.backend.service_manager] Starting service:", service)
+            print("[service_manager] Starting service:", service)
             process=subprocess.run([service],check=False)
             process.stdout=subprocess.DEVNULL
-        print("[Faust.backend.main] Other backend services started.")
+        print("[main] Other backend services started.")
 
 
 async def invoke_agent_locked(target_agent, payload, config=None):
     if config is None:
         config = {"configurable": {"thread_id": THREAD_ID}}
-    return await target_agent.ainvoke(payload, config)
+    async with agent_lock:
+        return await target_agent.ainvoke(payload, config)
 
 
 async def stream_agent_locked(target_agent, payload, config=None):
     if config is None:
         config = {"configurable": {"thread_id": THREAD_ID}}
-    async for message_chunk, metadata in target_agent.astream(payload, config, stream_mode="messages"):
-        yield message_chunk, metadata
+    async with agent_lock:
+        async for message_chunk, metadata in target_agent.astream(payload, config, stream_mode="messages"):
+            yield message_chunk, metadata
         
 startServices()
 @app.on_event("startup")
@@ -105,25 +109,28 @@ async def startup_event():
         checkpointer=InMemorySaver()
         storer=InMemoryStore()
     middlewares=[]
-    middlewares.append(TodoListMiddleware())
     #--- End of checkpoint middleware and store setup
     #--- Create the agent with the specified model, tools, and checkpoint/store.
-    agent=create_agent(model="deepseek-chat",checkpointer=checkpointer,tools=llm_tools.toollist,store=storer,middleware=middlewares)
-    print("[Faust.backend.main]Agent created with Deepseek-chat model and tools.")
+    agent=create_agent(model="deepseek-chat",checkpointer=checkpointer,tools=llm_tools.toollist,store=storer)
+    print("[main]Agent created with Deepseek-chat model and tools.")
     if NOT_INITIALIZED:
         await invoke_agent_locked(agent,{"messages":[{"role":"system","content":PROMPT}]})
     else:
         await invoke_agent_locked(agent,{"messages":[{"role":"user","content":"对话重新开始了"}]})
     with open("faust_main.log","r",encoding="utf-8") as f:
         t=f.readlines()[-5:]
-    print("[Faust.backend.main]日志内容：",t)
+    print("[main]日志内容：",t)
     await invoke_agent_locked(agent,{"messages":[{"role":"user","content":f"这是你自上次对话以来后的日志：{' '.join(t)}"}]})
     
     #--- Start the trigger watchdog thread to monitor and activate triggers.
-    print("[Faust.backend.main] Trigger Watchdog Thread starting...")
+    print("[main] Trigger Watchdog Thread starting...")
     trigger_manager.start_trigger_watchdog_thread()
+    try:
+        await minecraft_client.ensure_started()
+    except Exception as e:
+        print(f"[main] Minecraft bridge not connected on startup: {e}")
     llm_tools.STARTED=True# 声明启动完成
-    print("[Faust.backend.main]FAUST Backend Main Service started.")
+    print("[main]FAUST Backend Main Service started.")
     
 @app.post("/faust/chat")
 #@deprecated(reason="This endpoint is kept for compatibility and development but the primary chat interface is now the websocket /faust/chat for frontend streaming.")
@@ -176,20 +183,21 @@ async def chat_websocket(websocket: WebSocket):
                 events.ignore_trigger_event.set()
                 await websocket.send_text(json.dumps({"type": "start"}, ensure_ascii=False))
                 reply = ""
-                print("[Faust.backend.main] Received chat message:", text)
+                print("[main] Received chat message:", text)
                 async for message_chunk, metadata in stream_agent_locked(agent,{"messages":[{"role":"user","content":text}]}):
                     if message_chunk.content:
                         reply += message_chunk.content
                         print(message_chunk.content, end="|", flush=True)
                         await websocket.send_text(json.dumps({"type": "delta", "content": message_chunk.content}, ensure_ascii=False))
                 await websocket.send_text(json.dumps({"type": "done", "reply": reply}, ensure_ascii=False))
+                print()
                 events.ignore_trigger_event.clear()
             except Exception as e:
                 events.ignore_trigger_event.clear()
                 print("Chat websocket error:", e)
                 await websocket.send_text(json.dumps({"type": "error", "error": str(e)}, ensure_ascii=False))
     except WebSocketDisconnect:
-        print("[Faust.backend.main] chat websocket disconnected")
+        print("[main] chat websocket disconnected")
 
 @app.websocket("/faust/command")
 async def command_websocket(websocket: WebSocket):
@@ -201,7 +209,7 @@ async def command_websocket(websocket: WebSocket):
             if trigger_manager.has_queue_task() and not events.ignore_trigger_event.is_set():
                 # activate chat
                 task=trigger_manager.get_next_trigger()
-                print("[Faust.backend.main] Trigger activated:",task)
+                print("[main] Trigger activated:",task)
                 trigger_text = f"触发器唤醒了你，请根据触发器内容执行相应操作。{str(task)}"
                 if isinstance(task, dict):
                     ttype = task.get("type")
@@ -209,6 +217,14 @@ async def command_websocket(websocket: WebSocket):
                     if ttype == "event" and task.get("event_name") == "nimble_result" and callback_id:
                         result = nimble.get_nimble_result(callback_id, cleanup=False)
                         trigger_text = f"灵动交互窗口收到用户提交。callback_id={callback_id}，用户结果={result}。请继续处理。"
+                    elif ttype == "event" and task.get("event_name") == "mc_event":
+                        payload = task.get("payload") or {}
+                        trigger_text = (
+                            "Minecraft事件唤醒了你。"
+                            f"事件类型={payload.get('mc_event_type')}，"
+                            f"事件详情={json.dumps(payload, ensure_ascii=False)}。"
+                            "请结合当前游戏状态，决定是否调用 Minecraft 工具继续操作。"
+                        )
                     elif ttype == "nimble-reminder" and callback_id:
                         session = nimble.get_nimble_session(callback_id)
                         if not session:
@@ -228,7 +244,7 @@ async def command_websocket(websocket: WebSocket):
                 await websocket.send_text(f"TTS {reply}")
             if not forward_queue.empty():
                 command=forward_queue.get()
-                print("[Faust.backend.main] Forwarding command from queue:",command)
+                print("[main] Forwarding command from queue:",command)
                 await websocket.send_text(f"{command}")
             await asyncio.sleep(0.05)
     except Exception as e:
@@ -334,11 +350,11 @@ async def status_post():
 
 async def _graceful_shutdown_task():
     global uvicorn_server
-    print("[Faust.backend.main] Graceful shutdown requested.")
+    print("[main] Graceful shutdown requested.")
     await asyncio.sleep(0.1)
 
     uvicorn_server.should_exit = True
-    print("[Faust.backend.main] Uvicorn shutdown flag set.")
+    print("[main] Uvicorn shutdown flag set.")
 
 @app.post("/faust/shutdown")
 async def shutdown_post():

@@ -11,7 +11,7 @@ except Exception:
 
 HTTP_URL = "http://127.0.0.1:13900/faust/chat"
 WS_URL = "ws://127.0.0.1:13900/faust/command"
-
+CHAT_WS_URL = "ws://127.0.0.1:13900/faust/chat"
 
 def start_ws_listener():
     def on_message(ws, message):
@@ -43,16 +43,62 @@ def start_ws_listener():
     return ws_app, th
 
 
-def chat_request(text: str, timeout: int = 30):
+def chat_request(text):
     try:
-        r = requests.post(HTTP_URL, json={"text": text}, timeout=timeout)
+        state = {
+            "reply": "",
+            "error": None,
+        }
+
+        def on_message(ws, message):
+            try:
+                json_msg = json.loads(message)
+                msg_type = json_msg.get("type")
+                if msg_type == "delta":
+                    chunk = json_msg.get("content", "")
+                    state["reply"] += chunk
+                    print(chunk, end="", flush=True)
+                elif msg_type == "done":
+                    final_reply = json_msg.get("reply", state["reply"])
+                    state["reply"] = final_reply
+                    print("\n[CHAT DONE]", final_reply)
+                    ws.close()
+                elif msg_type == "error":
+                    error_msg = json_msg.get("error") or json_msg.get("message") or message
+                    state["error"] = error_msg
+                    print("\n[CHAT ERROR]", error_msg)
+                    ws.close()
+                else:
+                    print("\n[WS MESSAGE]", json_msg)
+            except Exception:
+                print("\n[WS MESSAGE] (无法解析)", message)
+
+        def on_error(ws, error):
+            state["error"] = str(error)
+            print("\n[CHAT WS ERROR]", error)
+
+        def on_close(ws, close_status_code, close_msg):
+            if close_status_code or close_msg:
+                print("\n[CHAT WS CLOSED]", close_status_code, close_msg)
+
+        def on_open(ws):
+            payload = json.dumps({"text": text}, ensure_ascii=False)
+            ws.send(payload)
+
+        ws_chat_app = websocket.WebSocketApp(
+            CHAT_WS_URL,
+            on_message=on_message,
+            on_error=on_error,
+            on_close=on_close,
+            on_open=on_open,
+        )
+        print("[INFO] 已发送聊天请求，等待响应...")
+        ws_chat_app.run_forever()
+        if state["error"]:
+            return {"error": state["error"]}
+        return {"reply": state["reply"]}
     except Exception as e:
         return {"error": f"请求失败: {e}"}
-    try:
-        return r.json()
-    except Exception:
-        return {"raw": r.text}
-
 
 def main():
     print("debug-console 启动。HTTP:", HTTP_URL, "WS:", WS_URL)
@@ -87,14 +133,10 @@ def main():
                 requests.post(HTTP_URL.replace("/faust/chat", "/faust/humanInLoop/feedback"), json={"feedback": False})
                 print("[HIL FEEDBACK]", text[3:].strip(),sep="")
                 continue
-            resp = chat_request(text)
-            if "reply" in resp:
-                print("[REPLY]", resp["reply"])
-            elif "error" in resp:
-                print("[ERROR]", resp["error"])
-            else:
-                # fallback: pretty print whatever returned
-                print("[HTTP RESPONSE]", json.dumps(resp, ensure_ascii=False, indent=2))
+            result = chat_request(text)
+            if isinstance(result, dict) and result.get("error"):
+                print("[CHAT REQUEST ERROR]", result["error"])
+
     except KeyboardInterrupt:
         pass
     # give ws thread a moment to print final messages

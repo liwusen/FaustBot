@@ -16,6 +16,7 @@ import faust_backend.gui_llm_lib as gui_llm_lib
 import faust_backend.trigger_manager as trigger_manager
 import faust_backend.nimble as nimble
 import faust_backend.rag_client as rag_client
+import faust_backend.minecraft_client as minecraft_client
 import winsound
 import asyncio
 import faust_backend.events as events
@@ -33,14 +34,14 @@ RAG_ASYNC_LOCK = threading.Lock()
 RAG_TRACKER = rag_client.docTracker()
 #define add to TOOLLIST wrapper
 def __init__():
-    print("[Faust.backend.llm_tools] Initializing llm_tools module...")
+    print("[llm_tools] Initializing llm_tools module...")
 def add_to_tool_list(func):
     toollist.append(func)
     return func
 def record_func_name(func):
     func_name=func.__name__
     ORIGINAL_TOOL_FUNCS[func_name]=func
-    print(f"[Faust.backend.llm_tools] Registered tool: {func_name}")
+    print(f"[llm_tools] Registered tool: {func_name}")
     return func
 
 
@@ -184,7 +185,7 @@ def pythonExecTool(code: str) -> str:
         # 以便在返回时包含输出结果
         local_namespace = {}
         sio = io.StringIO()
-        print("[Faust.backend.llm_tools.pythonExecTool] Executing code:", code)
+        print("[llm_tools.pythonExecTool] Executing code:", code)
         sys.stdout = sio
         try:
             exec(code, {}, local_namespace)
@@ -211,7 +212,7 @@ def sysExecTool(command: str) -> str:
         str: 命令的输出结果字符串，或者错误信息。
     """
     try:
-        print("[Faust.backend.llm_tools.sysExecTool] Executing command:", command)
+        print("[llm_tools.sysExecTool] Executing command:", command)
         with os.popen(command) as f:
             output = f.read()
         return output if output else "命令执行成功，但没有输出。"
@@ -231,7 +232,7 @@ def listDiaryFilesTool() -> str:
         str: 日记目录下的文件列表，或者错误信息。
     """
     try:
-        print("[Faust.backend.llm_tools.listDiaryFilesTool] Listing diary files in directory:", DIARY_DIR)
+        print("[llm_tools.listDiaryFilesTool] Listing diary files in directory:", DIARY_DIR)
         files = os.listdir(DIARY_DIR)
         files=[f for f in files if f.endswith('.txt')]
         return "\n".join(files) if files else "日记目录为空。"
@@ -252,7 +253,7 @@ def readDiaryFileTool(filename: str) -> str:
     """
     file_path=os.path.join(DIARY_DIR,filename)
     try:
-        print("[Faust.backend.llm_tools.readDiaryFileTool] Reading diary file:", file_path)
+        print("[llm_tools.readDiaryFileTool] Reading diary file:", file_path)
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
         return content
@@ -277,7 +278,7 @@ def writeDiaryFileTool(content: str) -> str:
     filename = now.strftime("%Y%m%d_%H%M%S") + ".txt"
     file_path=os.path.join(DIARY_DIR,filename)
     try:
-        print("[Faust.backend.llm_tools.writeDiaryFileTool] Writing to diary file:", file_path)
+        print("[llm_tools.writeDiaryFileTool] Writing to diary file:", file_path)
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(content)
         return f"日记文件写入成功，文件名为: {filename}"
@@ -300,7 +301,7 @@ def listDirectoryTool(path: str) -> str:
     """
     #dir commands/ls command
     try:
-        print("[Faust.backend.llm_tools.listDirectoryTool] Listing directory:", path)
+        print("[llm_tools.listDirectoryTool] Listing directory:", path)
         if os.name == 'nt':  # Windows
             with os.popen(f'dir "{path}"') as f:
                 output = f.read()
@@ -326,7 +327,7 @@ def readTextFileTool(file_path: str) -> str:
         str: 文件内容的字符串表示，或者错误信息。
     """
     try:
-        print("[Faust.backend.llm_tools.readTextFileTool] Reading file:", file_path)
+        print("[llm_tools.readTextFileTool] Reading file:", file_path)
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
         return content
@@ -348,7 +349,7 @@ def writeTextFileTool(file_path: str, content: str) -> str:
         str: 写入成功的确认信息，或者错误信息。
     """
     try:
-        print("[Faust.backend.llm_tools.writeTextFileTool] Writing to file:", file_path)
+        print("[llm_tools.writeTextFileTool] Writing to file:", file_path)
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(content)
         return "文件写入成功。"
@@ -368,7 +369,7 @@ def webSearchTool(query: str) -> str:
     Returns:
         str: 搜索结果的摘要。
     """
-    print("[Faust.backend.llm_tools.webSearchTool] Searching web for query:", query)
+    print("[llm_tools.webSearchTool] Searching web for query:", query)
     return swrapper.run(query=query)
 wwrapper=WikipediaAPIWrapper()
 @add_to_tool_list
@@ -383,7 +384,7 @@ def wikiSearchTool(query: str) -> str:
     Returns:
         str: 搜索结果的摘要。
     """
-    print("[Faust.backend.llm_tools.wikiSearchTool] Searching Wikipedia for query:", query)
+    print("[llm_tools.wikiSearchTool] Searching Wikipedia for query:", query)
     return wwrapper.run(query=query)
 
 @add_to_tool_list
@@ -400,7 +401,7 @@ def beepTool(frequency: int, duration: int) -> str:
         str: 结果信息。
     """
     if os.name == 'nt':
-        print("[Faust.backend.llm_tools.beepTool] Emitting beep sound with frequency:", frequency, "duration:", duration)
+        print("[llm_tools.beepTool] Emitting beep sound with frequency:", frequency, "duration:", duration)
         winsound.Beep(frequency, min(duration,3000))
         return "蜂鸣声已发出。"
     else:
@@ -419,7 +420,7 @@ def musicPlayTool(url: str) -> str:
     Returns:
         str: 结果信息。
     """
-    print("[Faust.backend.llm_tools.musicPlayTool] Playing music from URL:", url)
+    print("[llm_tools.musicPlayTool] Playing music from URL:", url)
     backend2frontend.FrontEndPlayMusic(url)
     return "音乐播放命令已发送到前端。"
 @add_to_tool_list
@@ -436,7 +437,7 @@ def bgPlayTool(url: str) -> str:
     Returns:
         str: 结果信息。
     """
-    print("[Faust.backend.llm_tools.bgPlayTool] Playing background music from URL:", url)
+    print("[llm_tools.bgPlayTool] Playing background music from URL:", url)
     backend2frontend.FrontEndPlayBG(url)
     return "背景音乐播放命令已发送到前端。"
 @add_to_tool_list
@@ -456,7 +457,7 @@ def guiOpTool(command: str) -> str:
         str: GUI操作的结果字符串，或者错误信息。
     """
     try:
-        print("[Faust.backend.llm_tools.guiOpTool] Executing GUI operation command:", command)
+        print("[llm_tools.guiOpTool] Executing GUI operation command:", command)
         result_str=gui_llm_lib.gui_op(command)
         return result_str
     except Exception as e:
@@ -472,7 +473,7 @@ def guiOpTool(command: str) -> str:
 #         str: OCR识别结果的字符串表示，或者错误信息。
 #     """
 #     try:
-#         print("[Faust.backend.llm_tools.getUserFullScreenOCRResultTool] Getting full screen OCR result.")
+#         print("[llm_tools.getUserFullScreenOCRResultTool] Getting full screen OCR result.")
 #         # 这里调用实际的OCR处理逻辑
 #         ocr_result = "模拟的OCR识别结果"
 #         return ocr_result
@@ -490,9 +491,9 @@ def guiOpTool(command: str) -> str:
 #     Returns:
 #         str: 用户的反馈结果，可能是 "approved", "rejected", "timeout" 或 "unknown"。
 #     """
-#     print("[Faust.backend.llm_tools.test_HIL_tool] Sending human-in-the-loop feedback request.")
+#     print("[llm_tools.test_HIL_tool] Sending human-in-the-loop feedback request.")
 #     result=await HILRequest(id="test_request",title="这是一个测试请求",summary="请批准或拒绝这个测试请求。")
-#     print("[Faust.backend.llm_tools.test_HIL_tool] Received feedback result:", result)
+#     print("[llm_tools.test_HIL_tool] Received feedback result:", result)
 #     return f"用户反馈结果: {str(result)}"
 
 @add_to_tool_list
@@ -650,7 +651,7 @@ def triggerListTool() -> str:
     if not STARTED:
         return "系统尚未完全启动，无法列出触发器。"
     try:
-        print("[Faust.backend.llm_tools.triggerListTool] Listing all triggers.")
+        print("[llm_tools.triggerListTool] Listing all triggers.")
         return trigger_manager.get_trigger_information()
     except Exception as e:
         return f"列出触发器出错: {str(e)}"
@@ -758,7 +759,7 @@ def triggerAddTool(trigger_json: str) -> str:
     if not STARTED:
         return "系统尚未完全启动，无法操作触发器。"
     try:
-        print("[Faust.backend.llm_tools.triggerAddTool] Adding new trigger with JSON:", trigger_json)
+        print("[llm_tools.triggerAddTool] Adding new trigger with JSON:", trigger_json)
         trigger_manager.append_trigger(trigger_json)
         return f"触发器添加成功"
     except Exception as e:
@@ -778,7 +779,7 @@ def triggerRemoveTool(trigger_id: str) -> str:
     if not STARTED:
         return "系统尚未完全启动，无法操作触发器。"
     try:
-        print("[Faust.backend.llm_tools.triggerRemoveTool] Removing trigger with ID:", trigger_id)
+        print("[llm_tools.triggerRemoveTool] Removing trigger with ID:", trigger_id)
 
         trigger_manager.delete_trigger(trigger_id)
         return f"触发器移除成功，ID: {trigger_id}"
@@ -881,6 +882,92 @@ def ragQueryAsyncGetTool(rag_callback_id: str) -> str:
         return str(result.get("result", ""))
     except Exception as e:
         return f"获取 RAG 异步查询结果失败: {str(e)}"
+
+
+@add_to_tool_list
+@tool
+@record_func_name
+def minecraftCommandTool(command_json: str) -> str:
+    """
+    Description:
+        向 Minecraft 操作系统发送一条 JSON 命令，并返回执行结果。
+        这是 FaustBot 操作 Minecraft 的主入口工具。
+    Args:
+        command_json (str): JSON 格式命令，例如 {"name":"get-mobs-around","args":{"radius":5}}
+    Returns:
+        str(json): 执行结果 JSON。
+    """
+    try:
+        payload = json.loads(command_json)
+        name = payload.get("name")
+        args = payload.get("args") or {}
+        if not name:
+            return json.dumps({"ok": False, "error": "missing command name"}, ensure_ascii=False)
+        result = asyncio.run(minecraft_client.send_command(name, args))
+        return json.dumps(result, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
+
+
+@add_to_tool_list
+@tool
+@record_func_name
+def minecraftConnectTool(host: str, port: int, username: str, version: str = "") -> str:
+    """
+    Description:
+        连接到 Minecraft 服务器。Agent 应自行决定何时加入服务器。
+    Args:
+        host (str): 服务器地址。
+        port (int): 服务器端口。
+        username (str): Bot 用户名。
+        version (str): 可选协议版本。
+    Returns:
+        str(json): 连接结果。
+    """
+    try:
+        result = asyncio.run(minecraft_client.connect_server(host, port, username, version or None))
+        return json.dumps(result, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
+
+
+@add_to_tool_list
+@tool
+@record_func_name
+def minecraftStatusTool() -> str:
+    """
+    Description:
+        获取当前 Minecraft Bot 状态，包括连接、坐标、血量、饱食度和附近实体等。
+    Args:
+        None
+    Returns:
+        str(json): Bot 状态 JSON。
+    """
+    try:
+        result = asyncio.run(minecraft_client.get_status())
+        return json.dumps(result, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
+
+
+@add_to_tool_list
+@tool
+@record_func_name
+def minecraftDisconnectTool(reason: str = "disconnect requested") -> str:
+    """
+    Description:
+        断开当前 Minecraft 服务器连接。
+    Args:
+        reason (str): 断开原因。
+    Returns:
+        str(json): 断开结果 JSON。
+    """
+    try:
+        result = asyncio.run(minecraft_client.disconnect_server(reason))
+        return json.dumps(result, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
+
 if __name__ == "__main__":
     for tool in toollist:
         print(f"Tool name: {tool.name},\nDescription: {tool.description}")

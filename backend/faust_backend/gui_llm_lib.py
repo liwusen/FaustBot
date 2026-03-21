@@ -224,7 +224,7 @@ def get_response(image_url: str, instruction: str) -> str:
 
     response = requests.post(API_URL, headers=HEADERS, json=data)
     result = response.json()
-    print("[Faust.backend.gui_llm_lib]API返回完整结果：", result)
+    print("[gui_llm_lib]API返回完整结果：", result)
     content = result["choices"][0]["message"]["content"]
     return content
 
@@ -258,8 +258,8 @@ def smart_size(image_url, point, factor=28, max_pixels=MAX_PIXELS, min_pixels=MI
     # 获取图片的原始尺寸
     height = image.height
     width = image.width
-    print(f"[Faust.backend.gui_llm_lib][DEBUG] 原始图片尺寸: {width} x {height}")
-    print(f"[Faust.backend.gui_llm_lib][DEBUG] 模型输出坐标: x={point['x']}, y={point['y']}")
+    print(f"[gui_llm_lib][DEBUG] 原始图片尺寸: {width} x {height}")
+    print(f"[gui_llm_lib][DEBUG] 模型输出坐标: x={point['x']}, y={point['y']}")
 
     # 将高度调整为factor的整数倍
     h_bar = round(height / factor) * factor
@@ -280,11 +280,11 @@ def smart_size(image_url, point, factor=28, max_pixels=MAX_PIXELS, min_pixels=MI
         h_bar = math.ceil(height * beta / factor) * factor
         # 重新计算调整后的宽度，确保为factor的整数倍
         w_bar = math.ceil(width * beta / factor) * factor
-    print(f"[Faust.backend.gui_llm_lib][DEBUG] 模型处理后的图片尺寸: {w_bar} x {h_bar}")
+    print(f"[gui_llm_lib][DEBUG] 模型处理后的图片尺寸: {w_bar} x {h_bar}")
 
     abs_x = int(point["x"] / w_bar * width)
     abs_y = int(point["y"] / h_bar * height)
-    print(f"[Faust.backend.gui_llm_lib][DEBUG] 映射后的实际坐标: x={abs_x}, y={abs_y}")
+    print(f"[gui_llm_lib][DEBUG] 映射后的实际坐标: x={abs_x}, y={abs_y}")
     return abs_x, abs_y
 
 
@@ -306,38 +306,38 @@ def execute_gui_action(action: str, parameters: dict, original_image_url: str):
         original_image_url (str): 原始屏幕截图的URL，用于坐标映射。
     """
     action = action.strip()  # 去除前后空格
-    print(f"[Faust.backend.gui_llm_lib]执行动作: {action}, 参数: {parameters}")
+    print(f"[gui_llm_lib]执行动作: {action}, 参数: {parameters}")
 
     if action == "CLICK":
         # 确保 'x' 和 'y' 存在并为数值类型
         if "x" not in parameters or "y" not in parameters:
-            print("[Faust.backend.gui_llm_lib]错误: CLICK 动作缺少 'x' 或 'y' 坐标。")
+            print("[gui_llm_lib]错误: CLICK 动作缺少 'x' 或 'y' 坐标。")
             return "Error: CLICK action missing 'x' or 'y' coordinates."
 
         # 将模型输出的坐标映射到原始屏幕分辨率
         try:
             abs_x, abs_y = smart_size(original_image_url, parameters)
             pyautogui.click(abs_x, abs_y)
-            print(f"[Faust.backend.gui_llm_lib]已点击坐标 ({abs_x}, {abs_y})")
+            print(f"[gui_llm_lib]已点击坐标 ({abs_x}, {abs_y})")
             return "Success"
         except Exception as e:
-            print(f"[Faust.backend.gui_llm_lib]坐标映射或点击失败: {e}")
+            print(f"[gui_llm_lib]坐标映射或点击失败: {e}")
             return f"Error: Coordinate mapping or click failed: {e}"
     elif action == "DOUBLE_CLICK":
         if 'x' not in parameters or 'y' not in parameters:
-            print("[Faust.backend.gui_llm_lib]错误: DOUBLE_CLICK 动作缺少 'x' 或 'y' 坐标。")
+            print("[gui_llm_lib]错误: DOUBLE_CLICK 动作缺少 'x' 或 'y' 坐标。")
             return "Error: DOUBLE_CLICK action missing 'x' or 'y' coordinates."
         try:
             abs_x, abs_y = smart_size(original_image_url, parameters)
             pyautogui.doubleClick(abs_x, abs_y)
-            print(f"[Faust.backend.gui_llm_lib]已双击坐标 ({abs_x}, {abs_y})")
+            print(f"[gui_llm_lib]已双击坐标 ({abs_x}, {abs_y})")
             return "Success"
         except Exception as e:
-            print(f"[Faust.backend.gui_llm_lib]坐标映射或双击失败: {e}")
+            print(f"[gui_llm_lib]坐标映射或双击失败: {e}")
             return f"Error: Coordinate mapping or double click failed: {e}"
     elif action=="RIGHT_CLICK":
         if 'x' not in parameters or 'y' not in parameters:
-            print("[Faust.backend.gui_llm_lib]错误: RIGHT_CLICK 动作缺少 'x' 或 'y' 坐标。")
+            print("[gui_llm_lib]错误: RIGHT_CLICK 动作缺少 'x' 或 'y' 坐标。")
             return "Error: RIGHT_CLICK action missing 'x' or 'y' coordinates."
         try:
             abs_x, abs_y = smart_size(original_image_url, parameters)
@@ -345,7 +345,7 @@ def execute_gui_action(action: str, parameters: dict, original_image_url: str):
             print(f"已右击坐标 ({abs_x}, {abs_y})")
             return "Success"
         except Exception as e:
-            print(f"[Faust.backend.gui_llm_lib] 坐标映射或右击失败: {e}")
+            print(f"[gui_llm_lib] 坐标映射或右击失败: {e}")
             return f"Error: Coordinate mapping or right click failed: {e}"
     elif action == "TYPE":
         if "text" not in parameters:
@@ -358,7 +358,7 @@ def execute_gui_action(action: str, parameters: dict, original_image_url: str):
         pyautogui.write(text_to_type)
         if needs_enter:
             pyautogui.press("enter")
-        print(f"[Faust.backend.gui_llm_lib]已输入文本: '{text_to_type}', 是否按回车: {needs_enter}")
+        print(f"[gui_llm_lib]已输入文本: '{text_to_type}', 是否按回车: {needs_enter}")
         return "Success"
     elif action == "SCROLL":
         if "direction" not in parameters or "amount" not in parameters:
@@ -372,32 +372,32 @@ def execute_gui_action(action: str, parameters: dict, original_image_url: str):
 
         if direction == "up":
             pyautogui.scroll(scroll_value)
-            print(f"[Faust.backend.gui_llm_lib]已向上滚动 {scroll_value} 单位。")
+            print(f"[gui_llm_lib]已向上滚动 {scroll_value} 单位。")
         elif direction == "down":
             pyautogui.scroll(-scroll_value)  # pyautogui向下滚动需要负值
-            print(f"[Faust.backend.gui_llm_lib]已向下滚动 {scroll_value} 单位。")
+            print(f"[gui_llm_lib]已向下滚动 {scroll_value} 单位。")
         else:
-            print(f"[Faust.backend.gui_llm_lib]警告: 未知滚动方向: {direction}")
+            print(f"[gui_llm_lib]警告: 未知滚动方向: {direction}")
 
     elif action == "KEY_PRESS":
         if "key" not in parameters:
-            print("[Faust.backend.gui_llm_lib]错误: KEY_PRESS 动作缺少 'key' 参数。")
+            print("[gui_llm_lib]错误: KEY_PRESS 动作缺少 'key' 参数。")
             return "Error: KEY_PRESS action missing 'key' parameter."
 
         key_to_press = parameters["key"].lower()
         pyautogui.press(key_to_press)
-        print(f"[Faust.backend.gui_llm_lib]已按下按键: {key_to_press}")
+        print(f"[gui_llm_lib]已按下按键: {key_to_press}")
         return "Success"
     elif action == "FINISH":
         message = parameters.get("message", "任务已完成。")
-        print(f"[Faust.backend.gui_llm_lib]任务完成: {message}")
+        print(f"[gui_llm_lib]任务完成: {message}")
         return "Success"
     elif action == "FAIL":
         reason = parameters.get("reason", "任务失败。")
-        print(f"[Faust.backend.gui_llm_lib]任务失败: {reason}")
+        print(f"[gui_llm_lib]任务失败: {reason}")
         return "Failure:Cannot Process Your Request"
     else:
-        print(f"[Faust.backend.gui_llm_lib]警告: 收到未知动作类型: {action}")
+        print(f"[gui_llm_lib]警告: 收到未知动作类型: {action}")
         return f"Error: Unknown action type: {action}"
 
     # 模拟人类操作的延时，避免GUI操作过快
@@ -410,15 +410,15 @@ def gui_op(instruction: str)->str:
     screen_shot = pyautogui.screenshot()
     screen_shot_path = "current_screen.png"
     screen_shot.save(screen_shot_path)
-    print(f"[Faust.backend.gui_llm_lib]已保存当前屏幕截图到 {screen_shot_path}")
+    print(f"[gui_llm_lib]已保存当前屏幕截图到 {screen_shot_path}")
 
     encoded_image = encode_image(screen_shot_path)
 
 
     original_image_url = f"data:image/png;base64,{encoded_image}"
-    print("[Faust.backend.gui_llm_lib]调用大模型进行指令解析...")
+    print("[gui_llm_lib]调用大模型进行指令解析...")
     model_response = get_response(original_image_url, instruction)
-    print("[Faust.backend.gui_llm_lib]大模型的回复：", model_response)
+    print("[gui_llm_lib]大模型的回复：", model_response)
     result_str=""
     try:
         response_dict = parse_json(model_response)
@@ -428,11 +428,11 @@ def gui_op(instruction: str)->str:
     except (ValueError, KeyError, json.JSONDecodeError) as e:
         print(f"处理模型响应失败: {e}")
         sys.exit(1)
-    print("[Faust.backend.gui_llm_lib]解析后的动作和参数")
-    print(f"[Faust.backend.gui_llm_lib]动作: {action}, 参数: {parameters}")
+    print("[gui_llm_lib]解析后的动作和参数")
+    print(f"[gui_llm_lib]动作: {action}, 参数: {parameters}")
     result_str += "执行结果是: "+execute_gui_action(action, parameters, f"file://{screen_shot_path}")
     os.remove(screen_shot_path)
     return result_str
 if __name__ == "__main__":
-    print(gui_op(input("[Faust.backend.gui_llm_lib]请输入您的指令: ")))
+    print(gui_op(input("[gui_llm_lib]请输入您的指令: ")))
     

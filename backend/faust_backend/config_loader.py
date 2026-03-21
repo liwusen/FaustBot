@@ -53,9 +53,9 @@ argparser.add_argument("--MOO",action="store_true",help="apt-get:???\n这里没�
 args = argparser.parse_args()
 if args.agent != "NONE":
     AGENT_NAME = args.agent
-    print(f"[Faust.backend.config_loader] Agent name overridden by command line argument: {AGENT_NAME}")
+    print(f"[config_loader] Agent name overridden by command line argument: {AGENT_NAME}")
 if args.run_other_backend_services:
-    print(f"[Faust.backend.config_loader] Running other backend services as subprocess.")
+    print(f"[config_loader] Running other backend services as subprocess.")
 if args.MOO:
     LIST=[]
     LIST.append("""
@@ -67,7 +67,7 @@ if args.MOO:
             ~~   ~~
 ..."Have you mooed today?"...""")
     print(random.choice(LIST))
-    print("[Faust.backend.config_loader]Apt-get:MOO!")
+    print("[config_loader]Apt-get:MOO!")
     sys.exit(325)
 AGENT_ROOT=p_join(CONFIG_ROOT, "agents", AGENT_NAME)
 if __name__=="__main__":

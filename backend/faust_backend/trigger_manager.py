@@ -116,7 +116,7 @@ class TriggerStore(BaseModel):
             store = cls(watchdog=items)
             return store
         except Exception as e:
-            print(f"[Faust.backend.trigger_manager] Error loading triggers file: {e}")
+            print(f"[trigger_manager] Error loading triggers file: {e}")
             # create fresh store and overwrite corrupted file
             store = cls()
             store.save()
@@ -163,7 +163,7 @@ def trigger_watchdog_thread_main(poll_interval: float = 0.5):
                         if eval(trig.eval_code):
                             trigger_queue.put(trig.model_dump())
                     except Exception as e:
-                        print(f"[Faust.backend.trigger_manager] Error evaluating trigger {trig.id}: {e}")
+                        print(f"[trigger_manager] Error evaluating trigger {trig.id}: {e}")
                 elif trig.type == "event":
                     if trig.event_name == "nimble_result" and trig.callback_id:
                         session = nimble.get_nimble_session(trig.callback_id)
@@ -174,6 +174,12 @@ def trigger_watchdog_thread_main(poll_interval: float = 0.5):
                                 _store.save()
                             except Exception:
                                 pass
+                    else:
+                        # for other events, just trigger and let backend-main decide if it matches
+                        print("[trigger_manager] Event trigger fired:", trig.event_name, "with payload:", trig.payload)
+                        trigger_queue.put(trig.model_dump())
+                        _store.watchdog.remove(trig) # remove event trigger after firing once
+                        _store.save()
                 elif trig.type == "nimble-reminder":
                     if not nimble.is_nimble_session_alive(trig.callback_id):
                         try:
@@ -198,7 +204,7 @@ def trigger_watchdog_thread_main(poll_interval: float = 0.5):
                     # unknown type ignored
                     continue
             except Exception as e:
-                print(f"[Faust.backend.trigger_manager] Watchdog loop error for trigger {getattr(trig,'id',None)}: {e}")
+                print(f"[trigger_manager] Watchdog loop error for trigger {getattr(trig,'id',None)}: {e}")
         time.sleep(poll_interval)
 _thread=None
 def start_trigger_watchdog_thread():
@@ -253,7 +259,7 @@ def append_trigger(trigger: dict | str):
         try:
             trigger = json.loads(trigger)
         except Exception as e:
-            print(f"[Faust.backend.trigger_manager] Invalid trigger JSON string: {e}")
+            print(f"[trigger_manager] Invalid trigger JSON string: {e}")
             raise
     global _store
     try:
@@ -273,7 +279,7 @@ def append_trigger(trigger: dict | str):
         else:
             raise ValueError(f"Unsupported trigger type: {ttype}")
     except Exception as e:
-        print(f"[Faust.backend.trigger_manager] Invalid trigger payload: {e}")
+        print(f"[trigger_manager] Invalid trigger payload: {e}")
         raise
     
     # remove any existing with same id, then append & save
@@ -282,7 +288,7 @@ def append_trigger(trigger: dict | str):
         _store.watchdog.append(t)
         _store.save()
     except Exception as e:
-        print(f"[Faust.backend.trigger_manager] Failed to append trigger: {e}")
+        print(f"[trigger_manager] Failed to append trigger: {e}")
         raise
 
 
@@ -294,7 +300,7 @@ def delete_trigger(trigger_id: str):
         try:
             _store.save()
         except Exception as e:
-            print(f"[Faust.backend.trigger_manager] Failed to save after delete: {e}")
+            print(f"[trigger_manager] Failed to save after delete: {e}")
 
 
 def get_trigger_information() -> str:
@@ -303,7 +309,7 @@ def get_trigger_information() -> str:
         data = {"watchdog": [t.model_dump() for t in _store.watchdog]}
         return json.dumps(data, indent=4, ensure_ascii=False, default=str)
     except Exception as e:
-        print(f"[Faust.backend.trigger_manager] Failed to serialize triggers: {e}")
+        print(f"[trigger_manager] Failed to serialize triggers: {e}")
         return "{}"
 
 
@@ -313,7 +319,7 @@ def clear_triggers():
     try:
         _store.save()
     except Exception as e:
-        print(f"[Faust.backend.trigger_manager] Failed to save after clear: {e}")
+        print(f"[trigger_manager] Failed to save after clear: {e}")
 def has_queue_task():
     return not trigger_queue.empty()
 if __name__ == "__main__":

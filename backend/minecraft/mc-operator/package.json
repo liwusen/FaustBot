@@ -1,0 +1,16 @@
+{
+	"name": "faust-mc-operator",
+	"version": "0.1.0",
+	"private": true,
+	"type": "commonjs",
+	"main": "src/index.js",
+	"scripts": {
+		"start": "node src/index.js"
+	},
+	"dependencies": {
+		"minecraft-data": "^3.80.0",
+		"mineflayer": "^4.20.1",
+		"mineflayer-pathfinder": "^2.4.5",
+		"ws": "^8.18.0"
+	}
+}
