@@ -73,6 +73,19 @@ def startServices():
             process=subprocess.run([service],check=False)
             process.stdout=subprocess.DEVNULL
         print("[Faust.backend.main] Other backend services started.")
+
+
+async def invoke_agent_locked(target_agent, payload, config=None):
+    if config is None:
+        config = {"configurable": {"thread_id": THREAD_ID}}
+    return await target_agent.ainvoke(payload, config)
+
+
+async def stream_agent_locked(target_agent, payload, config=None):
+    if config is None:
+        config = {"configurable": {"thread_id": THREAD_ID}}
+    async for message_chunk, metadata in target_agent.astream(payload, config, stream_mode="messages"):
+        yield message_chunk, metadata
         
 startServices()
 @app.on_event("startup")
@@ -98,13 +111,13 @@ async def startup_event():
     agent=create_agent(model="deepseek-chat",checkpointer=checkpointer,tools=llm_tools.toollist,store=storer,middleware=middlewares)
     print("[Faust.backend.main]Agent created with Deepseek-chat model and tools.")
     if NOT_INITIALIZED:
-        await agent.ainvoke({"messages":[{"role":"system","content":PROMPT}]},{"configurable":{"thread_id":THREAD_ID}})
+        await invoke_agent_locked(agent,{"messages":[{"role":"system","content":PROMPT}]})
     else:
-        await agent.ainvoke({"messages":[{"role":"user","content":"对话重新开始了"}]},{"configurable":{"thread_id":THREAD_ID}})
+        await invoke_agent_locked(agent,{"messages":[{"role":"user","content":"对话重新开始了"}]})
     with open("faust_main.log","r",encoding="utf-8") as f:
         t=f.readlines()[-5:]
     print("[Faust.backend.main]日志内容：",t)
-    await agent.ainvoke({"messages":[{"role":"user","content":f"这是你自上次对话以来后的日志：{' '.join(t)}"}]},{"configurable":{"thread_id":THREAD_ID}})
+    await invoke_agent_locked(agent,{"messages":[{"role":"user","content":f"这是你自上次对话以来后的日志：{' '.join(t)}"}]})
     
     #--- Start the trigger watchdog thread to monitor and activate triggers.
     print("[Faust.backend.main] Trigger Watchdog Thread starting...")
@@ -129,7 +142,7 @@ async def chat_post(payload: dict):
         return {"error": "no text provided"}
     try:
         events.ignore_trigger_event.set()
-        resp = await agent.ainvoke({"messages":[{"role":"user","content":text}]},{"configurable":{"thread_id":THREAD_ID}})
+        resp = await invoke_agent_locked(agent,{"messages":[{"role":"user","content":text}]})
         reply = resp["messages"][-1].content
         print('Chat post reply', reply)
         events.ignore_trigger_event.clear()
@@ -164,15 +177,11 @@ async def chat_websocket(websocket: WebSocket):
                 await websocket.send_text(json.dumps({"type": "start"}, ensure_ascii=False))
                 reply = ""
                 print("[Faust.backend.main] Received chat message:", text)
-                async for message_chunk, metadata in agent.astream(
-                        {"messages":[{"role":"user","content":text}]},{"configurable":{"thread_id":THREAD_ID}},
-                        stream_mode="messages",
-                    ):
-                        if message_chunk.content:
-                            reply += message_chunk.content
-                            print(message_chunk.content, end="|", flush=True)
-                            await websocket.send_text(json.dumps({"type": "delta", "content": message_chunk.content}, ensure_ascii=False))
-                            #await asyncio.sleep(0.005)
+                async for message_chunk, metadata in stream_agent_locked(agent,{"messages":[{"role":"user","content":text}]}):
+                    if message_chunk.content:
+                        reply += message_chunk.content
+                        print(message_chunk.content, end="|", flush=True)
+                        await websocket.send_text(json.dumps({"type": "delta", "content": message_chunk.content}, ensure_ascii=False))
                 await websocket.send_text(json.dumps({"type": "done", "reply": reply}, ensure_ascii=False))
                 events.ignore_trigger_event.clear()
             except Exception as e:
@@ -213,7 +222,7 @@ async def command_websocket(websocket: WebSocket):
                             trigger_manager.delete_trigger(session["expire_trigger_id"])
                             backend2frontend.FrontEndCloseNimbleWindow({"callback_id": callback_id, "reason": "expired"})
                         trigger_text = f"灵动交互窗口已过期关闭。callback_id={callback_id}。如有必要，请重新创建更明确的新窗口。"
-                resp = await agent.ainvoke({"messages":[{"role":"system","content":trigger_text}]},{"configurable":{"thread_id":THREAD_ID}})
+                resp = await invoke_agent_locked(agent,{"messages":[{"role":"system","content":trigger_text}]})
                 reply = resp["messages"][-1].content
                 print('Trigger activated reply', reply)
                 await websocket.send_text(f"TTS {reply}")

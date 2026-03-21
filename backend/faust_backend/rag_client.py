@@ -274,6 +274,7 @@ async def rag_query(
     response_type: str = "Multiple Paragraphs",
     enable_rerank: bool = False,
 ) -> str:
+    print("[RAG Client] Querying RAG with query:", query)
     payload = await _json_request(
         "POST",
         f"{base_url}/query",

@@ -21,4 +21,9 @@ faust_checkpoint.db*
 diary/
 #---frontend-live2d-models/
 frontend/2D/
-LightRAG/
+#LightRAG Backend Service
+inputs/
+.venv/
+__dev__/
+rag_storage/
+lightRAG.log

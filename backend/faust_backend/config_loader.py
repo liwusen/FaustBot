@@ -29,6 +29,7 @@ with open(CONFIG_FILE_P_PATH, 'r', encoding='utf-8') as f:
     SEARCH_API_KEY = private_config.get('SEARCH_API_KEY', '')
     GUI_OPERATOR_LLM_KEY = private_config.get('GUI_OPERATOR_LLM_KEY', '')
     SERCURITY_VERIFIER_LLM_KEY = private_config.get('SECURITY_VERIFIER_LLM_KEY', '')
+    RAG_OPENAI_API_KEY=private_config.get('RAG_OPENAI_API_KEY', '')
 with open(CONFIG_FILE_PATH, 'r', encoding='utf-8') as f:
     config = json.load(f)
     GUI_OPERATOR_LLM_MODEL = config.get('GUI_OPERATOR_LLM_MODEL', 'gui-plus')
@@ -60,23 +61,10 @@ if args.MOO:
     LIST.append("""
                  (__)
                  (oo)
-           /------\/
+           /------\\/
           / |    ||
-         *  /\---/\
+         *  /\\---/\\
             ~~   ~~
-..."Have you mooed today?"...""")
-    LIST.append("""                 (__)
-         _______~(..)~
-           ,----\(oo)
-          /|____|,'
-         * /"\ /\
-           ~ ~ ~ ~
-..."Have you mooed today?"...""")
-    LIST.append("""                     \_/
-   m00h  (__)       -(_)-
-      \  ~Oo~___     / \
-         (..)  |\
-___________|_|_|_____________
 ..."Have you mooed today?"...""")
     print(random.choice(LIST))
     print("[Faust.backend.config_loader]Apt-get:MOO!")
