@@ -1,8 +1,42 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
 let mainWindow = null;
+
+const GLOBAL_SHORTCUTS = [
+  { accelerator: 'CommandOrControl+Alt+A', command: 'TOGGLE_ASR' },
+  { accelerator: 'CommandOrControl+Alt+S', command: 'STOP_AUDIO' },
+  { accelerator: 'CommandOrControl+Alt+Up', command: 'SCALE_UP' },
+  { accelerator: 'CommandOrControl+Alt+Down', command: 'SCALE_DOWN' },
+  { accelerator: 'CommandOrControl+Alt+M', command: 'RANDOM_MOTION' },
+];
+
+function sendFaustCommand(command) {
+  if (!mainWindow || !mainWindow.webContents) return false;
+  try {
+    mainWindow.webContents.send('faust-command', command);
+    return true;
+  } catch (e) {
+    console.error('Failed to send faust command from shortcut', command, e);
+    return false;
+  }
+}
+
+function registerGlobalShortcuts() {
+  for (const item of GLOBAL_SHORTCUTS) {
+    try {
+      const ok = globalShortcut.register(item.accelerator, () => {
+        sendFaustCommand(item.command);
+      });
+      if (!ok) {
+        console.warn('[shortcut] register failed:', item.accelerator, '->', item.command);
+      }
+    } catch (e) {
+      console.error('[shortcut] register error:', item.accelerator, item.command, e);
+    }
+  }
+}
 
 function createWindow(){
   mainWindow = new BrowserWindow({
@@ -49,6 +83,7 @@ function createWindow(){
 
 app.whenReady().then(()=>{
   createWindow();
+  registerGlobalShortcuts();
   // Start WebSocket command client (main process)
   startCommandWS();
   app.on('activate', ()=>{ if (BrowserWindow.getAllWindows().length === 0) createWindow(); })
@@ -112,6 +147,10 @@ ipcMain.handle('faust-log', async (evt, msg) => {
 });
 
 app.on('window-all-closed', ()=>{ if (process.platform !== 'darwin') app.quit() });
+
+app.on('will-quit', ()=>{
+  try{ globalShortcut.unregisterAll(); }catch(e){ console.error('unregisterAll failed', e); }
+});
 
 // Try to load a WebSocket implementation for the main process.
 let WSImpl = null;

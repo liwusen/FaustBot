@@ -20,6 +20,7 @@ html,body{
   border-radius:6px;
   z-index:1000;
   pointer-events:none;
+  display:none;
 }
 
 canvas{ display:block; }
@@ -36,7 +37,8 @@ body.click-through, body.click-through #app, body.click-through canvas {
 
 /* keep these interactive even in click-through mode */
 body.click-through #modelQuickController,
-body.click-through #textChatBar {
+body.click-through #textChatBar,
+body.click-through #asrText {
   pointer-events: auto;
 }
 
@@ -209,8 +211,10 @@ body.click-through #textChatBar {
 
 /* ASR result bubble above model */
 #asrText{
-  transition: transform 0.08s linear, opacity 0.12s;
-  white-space: nowrap;
+  transition: left 0.08s linear, top 0.08s linear, opacity 0.12s, background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 /* VAD probability meter styling */
@@ -228,14 +232,55 @@ body.click-through #textChatBar {
   left:0; 
   top:0; 
   z-index:2000; 
-  pointer-events:none; 
+  pointer-events:auto; 
   display:none; 
-  background: rgba(0,0,0,0.6); 
+  background: linear-gradient(180deg, rgba(24,29,37,0.92), rgba(15,18,24,0.84)); 
   color:#fff; 
-  padding:6px 8px; 
-  border-radius:6px; 
+  padding:12px 14px; 
+  border-radius:16px; 
+  border: 1px solid rgba(255,255,255,0.12);
+  box-shadow: 0 14px 32px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.05);
+  backdrop-filter: blur(12px);
   font-weight:600; 
   font-size:20px; 
-  line-height:1; 
-  max-width: 15%;
+  line-height:1.45; 
+  min-width: 180px;
+  max-width: min(24vw, 360px);
+  max-height: 32vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  text-align: left;
+}
+
+#asrText::-webkit-scrollbar {
+  width: 8px;
+}
+
+#asrText::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.28);
+  border-radius: 999px;
+}
+
+#asrText::-webkit-scrollbar-track {
+  background: rgba(255,255,255,0.08);
+  border-radius: 999px;
+}
+
+#asrText[data-source="user"] {
+  background: linear-gradient(180deg, rgba(37, 99, 235, 0.94), rgba(29, 78, 216, 0.88));
+  border-color: rgba(147, 197, 253, 0.28);
+  color: #eff6ff;
+}
+
+#asrText[data-source="ai"] {
+  background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(238,242,247,0.92));
+  border-color: rgba(209, 213, 219, 0.7);
+  color: #111827;
+}
+
+#asrText[data-source="error"] {
+  background: linear-gradient(180deg, rgba(220, 38, 38, 0.95), rgba(153, 27, 27, 0.9));
+  border-color: rgba(254, 202, 202, 0.34);
+  color: #fff5f5;
 }

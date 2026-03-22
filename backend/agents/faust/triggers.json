@@ -1,3 +1,13 @@
 {
-    "watchdog": []
+    "watchdog": [
+        {
+            "id": "CORE_HEARTBEAT",
+            "type": "interval",
+            "recall_description": "核心心跳触发器，不要修改，每5分钟触发一次，用于Agent执行周期性任务或自我检查。",
+            "lifespan": null,
+            "created_at": 1774182924.7615588,
+            "interval_seconds": 300,
+            "last_triggered": 1774184900.3884177
+        }
+    ]
 }

@@ -29,3 +29,4 @@ rag_storage/
 lightRAG.log
 
 package-lock.json
+*.log

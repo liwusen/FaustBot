@@ -204,6 +204,7 @@ async def chat_websocket(websocket: WebSocket):
 @app.websocket("/faust/command")
 async def command_websocket(websocket: WebSocket):
     await websocket.accept()
+    backend2frontend.FrontEndSay("Hello World! 你好,世界!")
     try:
         while True:
             if backend2frontend.hasFrontEndTask():

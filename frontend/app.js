@@ -43,6 +43,12 @@
   let hoverQuickController = false;
   let interactionLocked = false;
   let clickThroughController = null;
+  let asrBubbleCurrentX = 0;
+  let asrBubbleCurrentY = 0;
+  let asrBubbleTargetX = 0;
+  let asrBubbleTargetY = 0;
+  let asrBubbleInitialized = false;
+  let asrBubbleSource = 'ai';
 
   function ensureNimbleHost(){
     let host = document.getElementById('nimble-host');
@@ -311,6 +317,18 @@
     return playMotionByName(picked);
   }
 
+  function interruptPlayback(){
+    try{ stopAudio(); }catch(e){}
+    try{ stopBackgroundAudio(); }catch(e){}
+    try{ resetStreamTtsState(); }catch(e){}
+    try{ if (ttsStatus) ttsStatus.textContent = '已打断'; }catch(e){}
+  }
+
+  function toggleAsr(){
+    if (asrRunning) stopRecording();
+    else startRecording();
+  }
+
   function loadSavedModelState(){
     loadModelState();
     if (!currentModel || !_savedModelState) return;
@@ -466,34 +484,34 @@
       try{ j = JSON.parse(raw); }catch(e){ j = null }
       if (!r.ok){
         asrStatusEl.textContent = `识别服务错误 (${r.status})`;
-        showOverlay('ASR服务返回错误: ' + raw);
+        showResultBubble('error', 'ASR服务返回错误: ' + raw);
         return;
       }
       if (j && j.status === 'success'){
         const text = j.text || '';
         if (text && text.length > 0){
-          showAsrText(text);
+          showResultBubble('user', text);
           asrStatusEl.textContent = '识别成功';
           // send recognized text to chat websocket if available
           try{ sendToChat(text); }catch(e){}
         } else {
           asrStatusEl.textContent = '识别成功但无文本';
-          showOverlay('ASR返回但文本为空');
+          showResultBubble('error', 'ASR返回但文本为空');
         }
       } else if (j && j.status === 'error'){
         asrStatusEl.textContent = '识别失败';
-        showOverlay('ASR失败: ' + (j.message || JSON.stringify(j)));
+        showResultBubble('error', 'ASR失败: ' + (j.message || JSON.stringify(j)));
       } else if (j && j.text){
-        showAsrText(j.text);
+        showResultBubble('user', j.text);
         asrStatusEl.textContent = '识别完成';
       } else {
         asrStatusEl.textContent = '无返回或未知格式';
-        showOverlay('ASR返回未知格式: ' + raw);
+        showResultBubble('error', 'ASR返回未知格式: ' + raw);
       }
     }catch(err){
       console.error('upload error', err);
       asrStatusEl.textContent = '网络或服务错误';
-      showOverlay('上传或网络错误: ' + String(err));
+      showResultBubble('error', '上传或网络错误: ' + String(err));
     }
   }
   //console.log("ASR Result:", asrResult);
@@ -595,11 +613,18 @@
         startRecording();
       } else if (cmd === 'STOP_ASR'){
         stopRecording();
+      } else if (cmd === 'TOGGLE_ASR'){
+        toggleAsr();
       } else if (cmd === 'STOP_AUDIO'){
-        stopAudio();
-        stopBackgroundAudio();
+        interruptPlayback();
+      } else if (cmd === 'INTERRUPT_SPEECH'){
+        interruptPlayback();
       } else if (cmd === 'RANDOM_MOTION'){
         playRandomMotion();
+      } else if (cmd === 'SCALE_UP'){
+        nudgeScale(0.05);
+      } else if (cmd === 'SCALE_DOWN'){
+        nudgeScale(-0.05);
       }
       else {
         console.warn('Unknown faust command', raw);
@@ -758,7 +783,7 @@
       const chunk = msg.content || '';
       currentChatRequest.replyText += chunk;
       currentChatRequest.pendingBuffer += chunk;
-      showAsrText(currentChatRequest.replyText);
+      showResultBubble('ai', currentChatRequest.replyText);
       const split = extractCompletedSentences(currentChatRequest.pendingBuffer);
       currentChatRequest.pendingBuffer = split.rest;
       console.log("收到增量回复，当前累计文本：", currentChatRequest.replyText);
@@ -793,6 +818,7 @@
     if (msg.type === 'error'){
       if (chatStatusEl) chatStatusEl.textContent = '聊天错误';
       if (textChatStatus) textChatStatus.textContent = '聊天错误';
+      showResultBubble('error', msg.error || '未知聊天错误');
       if (currentChatRequest.resumeAfter){
         resumeRecording();
       }
@@ -837,7 +863,7 @@
     textChatSending = true;
     textChatSendBtn.disabled = true;
     try{
-      showAsrText(text);
+      showResultBubble('user', text);
       await sendToChat(text);
       textChatInput.value = '';
     }finally{
@@ -847,14 +873,34 @@
     }
   }
 
+  function formatResultBubbleText(source, text){
+    const raw = String(text || '').trim();
+    if (!raw) return '';
+    if (source === 'user') return `用户:${raw}`;
+    if (source === 'error') return `!错误!:${raw}`;
+    return `AI:${raw}`;
+  }
+
+  function showResultBubble(source, text){
+    if (!asrTextEl) return;
+    asrBubbleSource = source || 'ai';
+    asrTextEl.dataset.source = asrBubbleSource;
+    const formatted = formatResultBubbleText(asrBubbleSource, text);
+    asrTextEl.style.display = formatted ? 'block' : 'none';
+    asrTextEl.textContent = formatted;
+    if (formatted) updateAsrTextPosition(true);
+  }
+
   function showAsrText(text){
     if (!asrTextEl) return;
     asrTextEl.style.display = text ? 'block' : 'none';
-    asrTextEl.textContent = text || '';
-    updateAsrTextPosition();
+    asrTextEl.dataset.source = 'ai';
+    asrBubbleSource = 'ai';
+    asrTextEl.textContent = formatResultBubbleText('ai', text || '');
+    updateAsrTextPosition(true);
   }
 
-  function updateAsrTextPosition(){
+  function updateAsrTextPosition(forceSnap = false){
     if (!asrTextEl || !currentModel || !app || !app.renderer) return;
     try{
       const canvasRect = app.renderer.view.getBoundingClientRect();
@@ -863,10 +909,22 @@
       const clientX = canvasRect.left + (b.x + b.width/2) * (canvasRect.width / app.renderer.width);
       const clientY = canvasRect.top + (b.y) * (canvasRect.height / app.renderer.height);
       // position slightly above head
-      const offsetY = -20;
-      asrTextEl.style.left = Math.round(clientX - asrTextEl.offsetWidth/2) + 'px';
-      asrTextEl.style.top = Math.round(clientY + offsetY) + 'px';
-      asrTextEl.style.fontSize=30
+      const offsetY = -36;
+      const bubbleWidth = Math.max(asrTextEl.offsetWidth, 180);
+      asrBubbleTargetX = clientX - bubbleWidth / 2;
+      asrBubbleTargetY = clientY + offsetY;
+      if (!asrBubbleInitialized || forceSnap){
+        asrBubbleCurrentX = asrBubbleTargetX;
+        asrBubbleCurrentY = asrBubbleTargetY;
+        asrBubbleInitialized = true;
+      } else {
+        const smooth = 0.2;
+        asrBubbleCurrentX += (asrBubbleTargetX - asrBubbleCurrentX) * smooth;
+        asrBubbleCurrentY += (asrBubbleTargetY - asrBubbleCurrentY) * smooth;
+      }
+      asrTextEl.style.left = Math.round(asrBubbleCurrentX) + 'px';
+      asrTextEl.style.top = Math.round(asrBubbleCurrentY) + 'px';
+      asrTextEl.style.fontSize = '20px';
     }catch(e){/*ignore*/}
   }
 
@@ -1142,11 +1200,15 @@
 
   function showOverlay(msg){
     const o = document.getElementById('overlay');
+    if (!o) return;
+    o.style.display = 'none';
     o.textContent = msg;
   }
 
   function clearOverlay(){
     const o = document.getElementById('overlay');
+    if (!o) return;
+    o.style.display = 'none';
     o.textContent = '';
   }
 
@@ -1604,12 +1666,10 @@
   });
 
   if (quickToggleAsrBtn) quickToggleAsrBtn.addEventListener('click', ()=>{
-    if (asrRunning) stopRecording();
-    else startRecording();
+    toggleAsr();
   });
   if (quickStopMediaBtn) quickStopMediaBtn.addEventListener('click', ()=>{
-    stopAudio();
-    stopBackgroundAudio();
+    interruptPlayback();
   });
   if (quickRandomMotionBtn) quickRandomMotionBtn.addEventListener('click', ()=>{ playRandomMotion(); });
   if (quickScaleUpBtn) quickScaleUpBtn.addEventListener('click', ()=>{ nudgeScale(0.05); });
@@ -1624,6 +1684,14 @@
       hoverQuickController = false;
       refreshQuickControllerVisibility();
     });
+  }
+  if (asrTextEl){
+    asrTextEl.addEventListener('mouseenter', ()=>{
+      if (clickThroughController) clickThroughController.forceInteractive();
+    });
+    asrTextEl.addEventListener('wheel', ()=>{
+      if (clickThroughController) clickThroughController.forceInteractive();
+    }, { passive: true });
   }
   updateQuickAsrButton();
 })();

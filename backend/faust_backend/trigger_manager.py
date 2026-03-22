@@ -7,14 +7,18 @@ from pathlib import Path
 import threading
 import os
 import random
-import faust_backend.nimble as nimble
+
 try:
     import faust_backend.config_loader as conf
+    import faust_backend.nimble as nimble
 except ImportError:
     import config_loader as conf
+    import nimble
 from pydantic import BaseModel, Field, field_validator
 
 TRIGGERS_FILE = Path("agents") / Path(conf.AGENT_NAME) / "triggers.json"
+print(f"[trigger_manager] Using triggers file: {TRIGGERS_FILE}")
+print(f"[trigger_manager] Trigger file content: {TRIGGERS_FILE.read_text(encoding='utf-8') if TRIGGERS_FILE.exists() else 'File does not exist'}")
 exitflag=False
 trigger_queue: "queue.Queue[dict]" = queue.Queue()
 
@@ -323,6 +327,14 @@ def clear_triggers():
 def has_queue_task():
     return not trigger_queue.empty()
 if __name__ == "__main__":
+    append_trigger({
+        "id": "CORE_HEARTBEAT",
+        "type": "interval",
+        "interval_seconds": 300,
+        "recall_description": "核心心跳触发器，不要修改，每5分钟触发一次，用于Agent执行周期性任务或自我检查。"
+    })
+    print("Initial triggers:", get_trigger_information())
+    exit(0)
     # test watchdog thread
     append_trigger({
         "id": "test_interval",
