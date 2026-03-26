@@ -6,12 +6,13 @@
 
 ## 一、项目整体结构概览
 
-`Faust` 项目可以大致分为四层：
+`Faust` 项目可以大致分为五层：
 
 1. **后端主服务层**：负责创建 Agent、管理上下文、处理聊天接口、触发器与前端交互。
 2. **工具能力层**：负责给 Agent 提供文件操作、系统执行、搜索、RAG、灵动交互等工具。
 3. **前端展示层**：基于 Electron + HTML/CSS/JS，负责 Live2D 展示、文字聊天、ASR/TTS 面板和灵动窗口渲染。
-4. **配置与脚本层**：负责环境配置、批处理启动、模型/角色 Prompt、依赖与辅助服务管理。
+4. **配置控制层**：负责统一管理配置文件、Agent 核心 Prompt 文件，以及运行时动态重载。
+5. **配置与脚本层**：负责环境配置、批处理启动、模型/角色 Prompt、依赖与辅助服务管理。
 
 ---
 
@@ -61,11 +62,20 @@ Python 依赖列表。主要对应后端运行所需的库。
   - `/faust/command/feedback`
 - 提供 HIL（Human In Loop）与 Nimble 灵动交互相关接口
 - 提供服务状态、优雅关停等控制接口
+- 提供配置中心 / 管理后台接口：
+  - `GET/POST /faust/admin/config`
+  - `POST /faust/admin/config/reload`
+  - `GET /faust/admin/runtime`
+  - `POST /faust/admin/runtime/reload-agent`
+  - `POST /faust/admin/runtime/reload-all`
+  - `GET/POST/DELETE /faust/admin/agents*`
+  - `GET /faust/admin/live2d/models`
+- 支持在**不重启 FastAPI 进程**时重新加载配置并重建 Agent runtime
 - 启动触发器 watchdog 线程
 
 可以把它理解成：
 
-> **Faust 的大脑入口 + API 总线 + 前后端桥梁**
+> **Faust 的大脑入口 + API 总线 + 前后端桥梁 + 配置中心后端入口**
 
 ---
 
@@ -84,6 +94,15 @@ ASR 相关接口封装或独立接口入口，和语音识别服务联动。
 
 #### `backend/faust.config.json`
 主配置文件，用于定义后端运行所需的公共参数。
+
+现在除了基础模型配置外，也可承载：
+
+- 当前 Agent 名称
+- RAG 服务地址、RAG 模型 Base URL、聊天模型、向量模型、向量维度等配置
+- 是否自动把聊天记录写入 `agents/<agent>/record/YYYYMMDD.md` 并触发后台索引
+- Live2D 默认模型路径 / 缩放 / 坐标
+- Minecraft bridge 设置
+- 前端默认行为（如默认点击穿透、默认 TTS 语言）
 
 #### `backend/faust.config.private.example`
 私密配置示例文件，通常用于放 API Key 或本地开发特定配置的模板。
@@ -105,6 +124,9 @@ ASR 服务启动脚本。
 
 #### `backend/TTS.bat`
 TTS 服务启动脚本。
+
+#### `backend/RAG.bat`
+LightRAG 服务启动脚本。现在它和 ASR/TTS 一样，被统一纳入后端服务管理器，可在配置中心中直接启动、停止、重启和查看日志。
 
 #### `backend/OCR.bat`
 OCR 服务启动脚本。
@@ -128,6 +150,14 @@ OCR 服务启动脚本。
 
 这些文件会在 `backend-main.py` 中被加载并拼接成初始系统 Prompt。
 
+在配置中心中，用户可以：
+
+- 列出所有 Agent
+- 新建 Agent（可选复制模板）
+- 删除 Agent（受保护策略限制）
+- 编辑四个核心 Prompt 文件
+- 切换当前运行 Agent 并重建 runtime
+
 ---
 
 ### 5. 子模块目录 `backend/faust_backend/`
@@ -144,8 +174,29 @@ OCR 服务启动脚本。
 - 读取 `faust.config.json` / private 配置
 - 解析命令行参数
 - 暴露配置字段给其他模块使用
+- 提供 `load_configs()` / `reload_configs()`，支撑运行时动态重载
 
 它是整个后端配置系统的入口之一。
+
+---
+
+#### `faust_backend/admin_runtime.py`
+后端配置中心 / 运行时管理辅助模块。
+
+主要职责：
+
+- 统一读取并保存公开/私密配置文件
+- 屏蔽私密配置的显示值
+- 列出可用 Agent 与 Live2D 模型
+- 管理 Agent 目录的增删查改
+- 读取 / 保存 Agent 核心 Prompt 文件
+- 提供运行时摘要数据供配置窗口展示
+- 限制危险删除（默认禁止删除当前 Agent 和 `faust`）
+- 创建 Agent 时自动补齐 `record/` 目录，用于滚动保存聊天记录 Markdown 文件
+
+这个模块可以理解成：
+
+> **配置中心的数据层 + Agent 目录管理层 + 运行时摘要服务层**
 
 ---
 
@@ -157,6 +208,7 @@ OCR 服务启动脚本。
 - 定义可被 Agent 调用的工具函数
 - 使用 `@tool`、`add_to_tool_list()` 等方式把函数注册进 `toollist`
 - 提供系统工具、文件读写工具、RAG 工具、时间工具、搜索工具等
+- 提供当前 Agent 相关路径刷新能力，保证切换 Agent 后 diary/RAG tracker 不会继续指向旧目录
 
 常见能力包括：
 
@@ -172,6 +224,39 @@ OCR 服务启动脚本。
 这个文件可以理解成：
 
 > **Faust Agent 可调用能力的汇总入口**
+
+---
+
+#### `faust_backend/rag_client.py`
+Faust 对 LightRAG 服务的客户端封装与本地文档追踪器。
+
+主要职责：
+
+- 请求 RAG 服务的 `/health`、`/config`、`/agent`、`/insert`、`/query` 等接口
+- 管理 `rag_doc_tracker.json`，以文件路径为索引追踪 RAG 中的文档 ID
+- 把每轮聊天自动落盘到 `agents/<agent>/record/YYYYMMDD.md`
+- 在后台把当天聊天记录增量同步入 RAG 索引
+
+现在它已经支持随着配置重载 / Agent 切换动态刷新工作目录，而不是停留在 import 时的旧路径。
+
+---
+
+#### `faust_backend/service_manager.py`
+统一的后端服务管理器。
+
+当前纳入统一管理的服务包括：
+
+- `asr`
+- `tts`
+- `mc_operator`
+- `rag`
+
+它负责：
+
+- 通过端口探测服务是否在线
+- 启动/停止/重启服务
+- 读取日志尾部给配置中心展示
+- 为主后端提供核心服务自启动能力
 
 ---
 
@@ -240,6 +325,7 @@ RAG 客户端模块。
 - 对接 RAG 子系统
 - 发起文档检索请求
 - 维护文档 tracker
+- 根据当前 Agent 对齐 RAG 的 agent_id
 
 ---
 
@@ -305,19 +391,22 @@ Electron 主进程入口。
 
 主要职责：
 
-- 创建透明、无边框、置顶的窗口
+- 创建透明、无边框、置顶的主窗口
+- 创建独立的“配置中心”窗口
 - 加载 `index.html`
+- 加载 `config-window.html`
 - 控制窗口全屏、鼠标穿透等特性
 - 提供 IPC 接口：
   - 模型状态保存/读取
   - 设置鼠标忽略
   - 输出 renderer 日志
+  - 打开配置中心窗口
 - 在主进程中连接后端 `ws://127.0.0.1:13900/faust/command`
 - 把后端命令转发给 renderer
 
 它相当于：
 
-> **前端壳程序 + 主进程控制台 + 后端命令桥**
+> **前端壳程序 + 主进程控制台 + 后端命令桥 + 配置窗口管理器**
 
 ---
 
@@ -330,11 +419,14 @@ Electron preload 脚本，用于把主进程能力安全暴露给 renderer。
 - 暴露模型状态存储 API
 - 暴露日志接口
 - 暴露后端命令监听接口
+- 暴露打开配置中心窗口的 API
 
 ---
 
 ### 4. `frontend/index.html`
 前端主页面，渲染 Live2D 模型容器、控制面板和交互元素。
+
+当前快捷控制器中已包含“配置中心”入口按钮。
 
 ---
 
@@ -357,6 +449,7 @@ Electron preload 脚本，用于把主进程能力安全暴露给 renderer。
 - 管理 TTS/音频播放
 - 处理 Nimble 灵动窗口的显示、提交与关闭
 - 接收主进程转发下来的 Faust 指令
+- 打开独立配置中心窗口
 
 从体量上看，`app.js` 是：
 
@@ -364,20 +457,54 @@ Electron preload 脚本，用于把主进程能力安全暴露给 renderer。
 
 ---
 
-### 7. `frontend/live2d_downloader.py`
+### 7. `frontend/config-window.html`
+配置中心独立窗口页面。
+
+主要职责：
+
+- 提供左侧导航栏
+- 承载配置表单、Agent 列表、运行控制区
+- 使用 `textarea` 风格编辑 Agent 核心文件
+
+---
+
+### 8. `frontend/config-window.css`
+配置中心窗口样式文件。
+
+主要职责：
+
+- 提供现代化、卡片式后台 UI 风格
+- 实现侧边栏导航、表单、编辑器、弹窗等样式
+
+---
+
+### 9. `frontend/config-window.js`
+配置中心窗口主脚本。
+
+主要职责：
+
+- 调用后端 `/faust/admin/*` 系列 API
+- 加载与保存配置文件
+- 管理 Agent 列表与核心 Prompt 文件
+- 执行 Agent 切换、删除、创建
+- 触发运行时动态重载
+
+---
+
+### 10. `frontend/live2d_downloader.py`
 用于下载或整理 Live2D 模型资源的辅助脚本。
 
 ---
 
-### 8. `frontend/start.bat`
+### 11. `frontend/start.bat`
 前端启动脚本，通常用于快速启动 Electron 前端。
 
 ---
 
-### 9. `frontend/2D/`
+### 12. `frontend/2D/`
 Live2D 模型资源目录。
 
-### 10. `frontend/libs/`
+### 13. `frontend/libs/`
 前端第三方库目录，例如 PIXI、Live2D 支持库等。
 
 ---
@@ -400,6 +527,12 @@ Faust 的角色人格与任务通过 `backend/agents/<agent_name>/` 目录中的
 - 可单独调整人格 / 核心记忆 / 当前任务
 - 有利于多人协作维护 Prompt
 
+配置中心稳定版采用的编辑方式是：
+
+- 不引入 Monaco 等重型编辑器
+- 直接使用 `textarea` 进行核心 Prompt 文件编辑
+- 优先保证稳定与易维护
+
 ---
 
 ## 六、运行时数据流简述
@@ -415,31 +548,69 @@ Faust 的角色人格与任务通过 `backend/agents/<agent_name>/` 目录中的
 7. 用户通过文本/语音与 Agent 交互
 8. Agent 在后端调用 `llm_tools.py` 中注册的工具执行文件操作、RAG 检索、GUI 交互等能力
 9. 后端通过 `backend2front.py` 把结果或动作命令推回前端
+10. 配置中心窗口通过 `/faust/admin/*` 接口管理配置、Agent 与运行时重载
 
 ---
 
-## 七、适合优先阅读的文件顺序
+## 七、配置中心与动态重载补充说明
+
+当前项目已经支持一个稳定版配置/控制程序，设计目标是：
+
+- 不要求用户手改 JSON 文件
+- 不要求用户在编辑器里直接修改 Agent 核心 Prompt
+- 在不重启 FastAPI 进程的情况下，重新加载配置并重建 Agent runtime
+
+### 配置中心可管理的内容
+
+- AI Provider 相关密钥、Base URL、模型名
+- 当前 Agent 选择
+- Agent 核心文件：`AGENT.md`、`ROLE.md`、`COREMEMORY.md`、`TASK.md`
+- Live2D 默认模型与展示参数
+- Minecraft bridge / RAG / 安全审查等后端配置
+
+### 动态重载的定义
+
+这里的“动态重载”不是热替换整个 Python 进程，而是：
+
+1. 重新读取公开/私密配置文件
+2. 更新运行时配置变量与环境变量
+3. 重新计算当前 Agent 与 Prompt
+4. 重新创建 Agent runtime
+5. 尽量保持 FastAPI 主进程持续运行
+
+### Agent 删除策略
+
+- 默认禁止删除当前正在使用的 Agent
+- 默认禁止删除 `faust`
+- 其他 Agent 允许通过配置中心删除
+
+---
+
+## 八、适合优先阅读的文件顺序
 
 如果你要快速理解项目，建议按下面顺序阅读：
 
 1. `faust/README.md`
 2. `backend/backend-main.py`
-3. `backend/faust_backend/llm_tools.py`
+3. `backend/faust_backend/admin_runtime.py`
 4. `backend/faust_backend/config_loader.py`
-5. `backend/faust_backend/backend2front.py`
-6. `backend/faust_backend/trigger_manager.py`
-7. `frontend/electron-main.js`
-8. `frontend/app.js`
-9. `frontend/index.html` + `styles.css`
-10. `backend/agents/<agent_name>/` 下的 Prompt 文件
+5. `backend/faust_backend/llm_tools.py`
+6. `backend/faust_backend/backend2front.py`
+7. `backend/faust_backend/trigger_manager.py`
+8. `frontend/electron-main.js`
+9. `frontend/config-window.html` + `config-window.js`
+10. `frontend/app.js`
+11. `frontend/index.html` + `styles.css`
+12. `backend/agents/<agent_name>/` 下的 Prompt 文件
 
 ---
 
-## 八、总结
+## 九、总结
 
 当前 `Faust` 项目可以理解为：
 
-- **后端**：一个基于 FastAPI + LangChain/LangGraph 的 Agent 主服务，负责上下文管理、工具调用和前后端协调。
-- **前端**：一个基于 Electron + Live2D 的桌宠/虚拟形象界面，负责展示、语音、文本交互和动态窗口渲染。
+- **后端**：一个基于 FastAPI + LangChain/LangGraph 的 Agent 主服务，负责上下文管理、工具调用、配置中心 API 和前后端协调。
+- **前端**：一个基于 Electron + Live2D 的桌宠/虚拟形象界面，负责展示、语音、文本交互和动态窗口渲染；同时包含一个独立配置中心窗口。
 - **工具层**：通过 `llm_tools.py` 将本地文件、系统命令、搜索、RAG、GUI 控制等能力暴露给 Agent。
+- **配置控制层**：通过 `admin_runtime.py`、`/faust/admin/*` 接口和独立配置窗口，实现配置编辑、Agent 管理和运行时动态重载。
 - **Prompt 层**：通过 `agents/<agent_name>/` 中的 Markdown 文件定义 Agent 的人格、记忆和任务。

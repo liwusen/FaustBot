@@ -59,6 +59,21 @@ body.click-through #asrText {
   pointer-events: none;
 }
 
+#statusDock button {
+  pointer-events: auto;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.08);
+  color: #fff;
+  border-radius: 999px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+#statusDock button:hover {
+  background: rgba(255,255,255,0.16);
+}
+
 #statusDock progress {
   width: 84px;
   height: 7px;

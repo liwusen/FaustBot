@@ -2,10 +2,12 @@ import psutil
 import subprocess
 import time
 from pathlib import Path
-import os
+from typing import Any, Dict, List
 
-BASE_DIR = Path(__file__).parent
+BACKEND_ROOT = Path(__file__).resolve().parent.parent
 STARTUP_WAIT_SECONDS = 15
+TAIL_LOG_LINES = 120
+CREATE_NEW_CONSOLE = getattr(subprocess, 'CREATE_NEW_CONSOLE', 0)
 
 def find_process_by_port(port):
     for conn in psutil.net_connections():
@@ -28,30 +30,55 @@ def find_process_by_port(port):
     return None
 
 
-services = [
+SERVICES: List[Dict[str, Any]] = [
     {
+        'key': 'tts',
         'name': 'TTS Service',
+        'description': '语音合成后端',
         'port': 5000,
-        'cmd_line': "../TTS.bat",
-        'log_file': "../tts-hub/GPT-SoVITS-Bundle/log_tts.log"
+        'script': 'TTS.bat',
+        'log_file': 'tts-hub/GPT-SoVITS-Bundle/log_tts.log'
     },
     {
+        'key': 'asr',
         'name': 'ASR Service',
+        'description': '语音识别后端',
         'port': 1000,
-        'cmd_line': "../ASR.bat",
-        'log_file': "../log_asr.log"
+        'script': 'ASR.bat',
+        'log_file': 'log_asr.log'
     },
     {
+        'key': 'mc_operator',
         'name': 'mc-operator',
+        'description': 'Minecraft 指令桥',
         'port': 18901,
-        'cmd_line': "../minecraft/mc-operator/mc.bat",
-        'log_file': "../minecraft/mc-operator/log.log"
+        'script': 'minecraft/mc-operator/mc.bat',
+        'log_file': 'minecraft/mc-operator/log.log'
+    },
+    {
+        'key': 'rag',
+        'name': 'RAG Service',
+        'description': 'LightRAG 检索增强服务',
+        'port': 18080,
+        'script': 'RAG.bat',
+        'log_file': 'rag.log'
     }
 ]
 
 
+def _service_map() -> Dict[str, Dict[str, Any]]:
+    return {item['key']: item for item in SERVICES}
+
+
+def get_service_definition(service_key: str) -> Dict[str, Any]:
+    service = _service_map().get((service_key or '').strip())
+    if not service:
+        raise KeyError(f'未知服务: {service_key}')
+    return service
+
+
 def resolve_service_path(relative_path):
-    return (BASE_DIR / relative_path).resolve()
+    return (BACKEND_ROOT / relative_path).resolve()
 
 
 def wait_for_service(service, timeout=STARTUP_WAIT_SECONDS):
@@ -64,93 +91,116 @@ def wait_for_service(service, timeout=STARTUP_WAIT_SECONDS):
     return None
 
 
-def start_service(service):
-    cmd = resolve_service_path(service['cmd_line'])
+def read_log_tail(log_path: Path | None, lines: int = TAIL_LOG_LINES) -> str:
+    if not log_path:
+        return ''
+    try:
+        if not log_path.exists():
+            return f'Log file not found: {log_path}'
+        raw = log_path.read_bytes()
+        for encoding in ('utf-8', 'utf-8-sig', 'gbk', 'cp936', 'latin-1'):
+            try:
+                text = raw.decode(encoding)
+                return '\n'.join(text.splitlines()[-lines:])
+            except UnicodeDecodeError:
+                continue
+        text = raw.decode('utf-8', errors='replace')
+        return '\n'.join(text.splitlines()[-lines:])
+    except Exception as e:
+        return f'Error reading log file: {str(e)}'
+
+
+def start_service(service_key: str, wait: bool = True):
+    service = get_service_definition(service_key)
+    existing = find_process_by_port(service['port'])
+    if existing:
+        return service_status(service_key, include_log=False)
+
+    cmd = resolve_service_path(service['script'])
     if not cmd.exists():
         raise FileNotFoundError(f"启动脚本不存在: {cmd}")
 
-    creationflags = getattr(subprocess, 'CREATE_NEW_CONSOLE', 0)
     subprocess.Popen(
         ['cmd', '/c', str(cmd)],
         cwd=str(cmd.parent),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        creationflags=creationflags,
+        creationflags=CREATE_NEW_CONSOLE,
         shell=False,
     )
+    if wait:
+        started_info = wait_for_service(service)
+        if not started_info:
+            raise TimeoutError(f"{service['name']} did not become ready on port {service['port']} within {STARTUP_WAIT_SECONDS}s.")
+    return service_status(service_key)
 
 
 def check_and_start_services():
-    for service in services:
+    for service in SERVICES:
         process_info = find_process_by_port(service['port'])
         if process_info:
             print(f"{service['name']} is already running (PID: {process_info['pid']}, Name: {process_info['name']})")
         else:
             print(f"{service['name']} is not running. Starting it...")
             try:
-                start_service(service)
+                start_service(service['key'])
             except Exception as e:
                 print(f"Failed to start {service['name']}: {e}")
-                continue
-
-            started_info = wait_for_service(service)
-            if started_info:
-                print(f"{service['name']} started successfully (PID: {started_info['pid']}, Name: {started_info['name']})")
-            else:
-                print(f"{service['name']} did not become ready on port {service['port']} within {STARTUP_WAIT_SECONDS}s.")
 
 
-def kill_service(service):
+def stop_service(service_key: str):
+    service = get_service_definition(service_key)
     process_info = find_process_by_port(service['port'])
     if process_info:
         try:
             p = psutil.Process(process_info['pid'])
             p.terminate()
             p.wait(timeout=5)
-            print(f"{service['name']} (PID: {process_info['pid']}) has been terminated.")
+            return service_status(service_key)
         except Exception as e:
-            print(f"Error terminating {service['name']} (PID: {process_info['pid']}): {str(e)}")
+            raise RuntimeError(f"Error terminating {service['name']} (PID: {process_info['pid']}): {str(e)}")
     else:
-        print(f"{service['name']} is not running.")
+        return service_status(service_key)
+
+
+def restart_service(service_key: str):
+    stop_service(service_key)
+    return start_service(service_key)
 
 
 def get_log_content(service):
     log_path = resolve_service_path(service['log_file'])
-    try:
-        if not log_path.exists():
-            return f"Log file not found: {log_path}"
-
-        raw = log_path.read_bytes()
-        for encoding in ('utf-8', 'utf-8-sig', 'gbk', 'cp936', 'latin-1'):
-            try:
-                return raw.decode(encoding)
-            except UnicodeDecodeError:
-                continue
-        return raw.decode('utf-8', errors='replace')
-    except Exception as e:
-        return f"Error reading log file: {str(e)}"
+    return read_log_tail(log_path, lines=2000)
 
 
-def get_service_status():
-    status = {}
-    for service in services:
-        process_info = find_process_by_port(service['port'])
-        status[service['name']] = {
-            'is_running': bool(process_info),
-            'process_info': process_info,
-            'port': service['port'],
-            'cmd_line': str(resolve_service_path(service['cmd_line'])),
-            'log_file': str(resolve_service_path(service['log_file']))
-        }
-    return status
+def service_status(service_key: str, include_log: bool = True):
+    service = get_service_definition(service_key)
+    process_info = find_process_by_port(service['port'])
+    result = {
+        'key': service['key'],
+        'name': service['name'],
+        'description': service.get('description', ''),
+        'is_running': bool(process_info),
+        'process_info': process_info,
+        'port': service['port'],
+        'script': str(resolve_service_path(service['script'])),
+        'log_file': str(resolve_service_path(service['log_file']))
+    }
+    if include_log:
+        result['log_tail'] = read_log_tail(resolve_service_path(service['log_file']))
+    return result
+
+
+def list_services(include_log: bool = False):
+    return [service_status(service['key'], include_log=include_log) for service in SERVICES]
 
 
 def print_service_status():
-    status = get_service_status()
-    for service_name, info in status.items():
-        print(f"{service_name}: {'Running' if info['is_running'] else 'Not Running'}")
+    status = list_services(include_log=False)
+    for info in status:
+        print(f"{info['name']}: {'Running' if info['is_running'] else 'Not Running'}")
         print(f"  Registered Port: {info['port']}")
-        print(f"  Start Script: {info['cmd_line']}")
+        print(f"  Start Script: {info['script']}")
         print(f"  Log File: {info['log_file']}")
         if info['is_running']:
             print(f"  PID: {info['process_info']['pid']}")
@@ -159,19 +209,16 @@ def print_service_status():
             print(f"  Command Line: {info['process_info']['cmdline']}")
 
 
-def demo():
-    print_service_status()
-    check_and_start_services()
-    print_service_status()
-    os.system("pause")
-    # kill all
-    for service in services:
-        kill_service(service)
-    print_service_status()
-    print(get_log_content(services[0]))
-    print(get_log_content(services[1]))
-    print(get_log_content(services[2]))
+def ensure_core_services_started():
+    results = []
+    for service_key in ('asr', 'tts', 'rag'):
+        try:
+            results.append(start_service(service_key, wait=False))
+        except Exception as exc:
+            results.append({'key': service_key, 'status': 'error', 'error': str(exc)})
+    return results
 
 
 if __name__ == "__main__":
-    demo()
+    for item in list_services(include_log=False):
+        print(item)

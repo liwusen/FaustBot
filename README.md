@@ -207,7 +207,7 @@ flowchart TD
 
 ~~Backend的一部分代码来源于 [morettt/my-neuro](https://github.com/morettt/my-neuro)~~
 
-现在已经不再有来源于https://github.com/morettt/my-neuro的内容了
+现在已经不再有来源于morettt/my-neuro的内容了
 
 | 部分       | 实现                    |
 | -------- | --------------------- |

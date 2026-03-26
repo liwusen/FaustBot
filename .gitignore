@@ -27,6 +27,10 @@ inputs/
 __dev__/
 rag_storage/
 lightRAG.log
+#nano-vectordb based RAG Service
+rag_storage_nano/
 
 package-lock.json
+
+
 *.log

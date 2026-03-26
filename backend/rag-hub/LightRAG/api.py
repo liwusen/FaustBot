@@ -16,7 +16,7 @@ print("Booting...")
 from lightrag import LightRAG, QueryParam
 from lightrag.utils import setup_logger, wrap_embedding_func_with_attrs
 setup_logger("lightrag", level="INFO")
-
+import sys
 import argparse
 argparser = argparse.ArgumentParser(description="LightRAG API Service\n命令行参数可以覆盖配置文件中的设置，优先级高于配置文件。\nThis agent has super cow powers")
 argparser.add_argument("--rag-openai-api-key", type=str, help="RAG OpenAI API Key")
@@ -24,17 +24,43 @@ argparser.add_argument("--rag-openai-base-url", type=str, default=os.getenv("LIG
 argparser.add_argument("--rag-chat-model", type=str, default=os.getenv("LIGHTRAG_CHAT_MODEL", "qwen3.5-27b"), help="RAG Chat Model Name")
 argparser.add_argument("--rag-embed-model", type=str, default=os.getenv("LIGHTRAG_EMBED_MODEL", "text-embedding-3-small"), help="RAG Embed Model Name")
 args = argparser.parse_args()
+
+PATH=str(Path(__file__).resolve().parent.parent.parent/"faust_backend")
+#insert to PATH
+sys.path.insert(0, PATH)
+print(PATH)
+print(os.listdir(PATH))
+import faust_backend.config_loader as conf
+print("Config loaded:", conf)
+
 BASE_DIR = Path(__file__).resolve().parent
 WORKING_ROOT_DIR = BASE_DIR / "rag_storage"
 HOST = os.getenv("LIGHTRAG_HOST", "127.0.0.1")
 PORT = int(os.getenv("LIGHTRAG_PORT", "18080"))
-OPENAI_BASE_URL = args.rag_openai_base_url
-OPENAI_API_KEY = args.rag_openai_api_key
-CHAT_MODEL = args.rag_chat_model
-EMBED_MODEL = args.rag_embed_model
-EMBED_DIM = int(os.getenv("LIGHTRAG_EMBED_DIM", "1536"))
-EMBED_MAX_TOKEN_SIZE = int(os.getenv("LIGHTRAG_EMBED_MAX_TOKEN_SIZE", "8192"))
-DEFAULT_AGENT_NAME = os.getenv("LIGHTRAG_AGENT_NAME", "default")
+
+
+def _load_runtime_defaults():
+    if conf is None:
+        return {
+            "api_key": args.rag_openai_api_key,
+            "base_url": args.rag_openai_base_url,
+            "chat_model": args.rag_chat_model,
+            "embed_model": args.rag_embed_model,
+            "embed_dim": int(os.getenv("LIGHTRAG_EMBED_DIM", "1536")),
+            "embed_max_token_size": int(os.getenv("LIGHTRAG_EMBED_MAX_TOKEN_SIZE", "8192")),
+            "agent_name": os.getenv("LIGHTRAG_AGENT_NAME", "default"),
+        }
+
+    conf.reload_configs()
+    return {
+        "api_key": args.rag_openai_api_key or getattr(conf, "RAG_OPENAI_API_KEY", ""),
+        "base_url": args.rag_openai_base_url or getattr(conf, "RAG_LLM_BASE_URL", "https://www.dmxapi.cn/v1"),
+        "chat_model": args.rag_chat_model or getattr(conf, "RAG_CHAT_MODEL", "qwen3.5-27b"),
+        "embed_model": args.rag_embed_model or getattr(conf, "RAG_EMBED_MODEL", "text-embedding-3-small"),
+        "embed_dim": int(getattr(conf, "RAG_EMBED_DIM", 1536)),
+        "embed_max_token_size": int(getattr(conf, "RAG_EMBED_MAX_TOKEN_SIZE", 8192)),
+        "agent_name": getattr(conf, "AGENT_NAME", os.getenv("LIGHTRAG_AGENT_NAME", "default")),
+    }
 
 WORKING_ROOT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -114,15 +140,7 @@ class StatusResponse(BaseModel):
     chat_model: str
     embed_model: str
 
-runtime_config = {
-    "api_key": OPENAI_API_KEY,
-    "base_url": OPENAI_BASE_URL,
-    "chat_model": CHAT_MODEL,
-    "embed_model": EMBED_MODEL,
-    "embed_dim": EMBED_DIM,
-    "embed_max_token_size": EMBED_MAX_TOKEN_SIZE,
-    "agent_name": DEFAULT_AGENT_NAME,
-}
+runtime_config = _load_runtime_defaults()
 
 
 rag_instance: Optional[LightRAG] = None
@@ -298,9 +316,9 @@ async def llm_model_func(
 
 
 @wrap_embedding_func_with_attrs(
-    embedding_dim=EMBED_DIM,
-    max_token_size=EMBED_MAX_TOKEN_SIZE,
-    model_name=EMBED_MODEL,
+    embedding_dim=runtime_config["embed_dim"],
+    max_token_size=runtime_config["embed_max_token_size"],
+    model_name=runtime_config["embed_model"],
 )
 async def embedding_func(texts: list[str]) -> np.ndarray:
     client = get_openai_client()

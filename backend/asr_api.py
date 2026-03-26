@@ -212,7 +212,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         "is_speech": speech_prob > VAD_THRESHOLD,
                         "probability": float(speech_prob)
                     }
-                    await websocket.send_text(json.dumps(result))
+                    await websocket.send_text(json.dumps(result, ensure_ascii=False))
             except WebSocketDisconnect:
                 print("客户端断开连接")
                 break

@@ -15,23 +15,37 @@ CONFIG_ROOT=d_name(d_name(a_path(__file__)))
 CONFIG_FILE_P_PATH = p_join(CONFIG_ROOT, 'faust.config.private.json')
 CONFIG_FILE_P_EXAMPLE=p_join(CONFIG_ROOT, 'faust.config.private.example')
 DATA_ROOT=p_join(CONFIG_ROOT, 'data')
+CONFIG_FILE_PATH= p_join(CONFIG_ROOT, 'faust.config.json')
 
-if not os.path.exists(CONFIG_FILE_P_PATH):
+
+def _ensure_private_config_exists():
+    if os.path.exists(CONFIG_FILE_P_PATH):
+        return
     print("[config_loader] Private config file not found." )
     print("     这说明你没有指定大模型KEY,请自行申请并且填入")
     shutil.copy(CONFIG_FILE_P_EXAMPLE, CONFIG_FILE_P_PATH)
     print(f"    已经使用模板文件创建了一个新的私密配置文件: {CONFIG_FILE_P_PATH}")
     raise FileNotFoundError(f"Private config file not found: {CONFIG_FILE_P_PATH}")
-CONFIG_FILE_PATH= p_join(CONFIG_ROOT, 'faust.config.json')
-with open(CONFIG_FILE_P_PATH, 'r', encoding='utf-8') as f:
-    private_config = json.load(f)
+
+
+def load_configs():
+    global private_config, config
+    global DEEPSEEK_API_KEY, SEARCH_API_KEY, GUI_OPERATOR_LLM_KEY, SECURITY_VERIFIER_LLM_KEY, RAG_OPENAI_API_KEY
+    global GUI_OPERATOR_LLM_MODEL, GUI_OPERATOR_LLM_BASE, PT_EVAL_TRIGGER_ENABLED, AGENT_NAME
+    global SECURITY_VERIFIER_LLM_API_ENDPOINT, SECURITY_VERIFIER_LLM_MODEL, SECURITY_SYS_ENABLED, AGENT_ROOT
+    global RAG_ENABLED, RAG_API_URL, RAG_LLM_BASE_URL, RAG_CHAT_MODEL, RAG_EMBED_MODEL, RAG_EMBED_DIM, RAG_EMBED_MAX_TOKEN_SIZE, RAG_AUTO_INDEX_RECORD
+    _ensure_private_config_exists()
+    with open(CONFIG_FILE_P_PATH, 'r', encoding='utf-8') as f:
+        private_config = json.load(f)
+    with open(CONFIG_FILE_PATH, 'r', encoding='utf-8') as f:
+        config = json.load(f)
+
     DEEPSEEK_API_KEY = private_config.get('DEEPSEEK_API_KEY', '')
     SEARCH_API_KEY = private_config.get('SEARCH_API_KEY', '')
     GUI_OPERATOR_LLM_KEY = private_config.get('GUI_OPERATOR_LLM_KEY', '')
     SECURITY_VERIFIER_LLM_KEY = private_config.get('SECURITY_VERIFIER_LLM_KEY', '')
-    RAG_OPENAI_API_KEY=private_config.get('RAG_OPENAI_API_KEY', '')
-with open(CONFIG_FILE_PATH, 'r', encoding='utf-8') as f:
-    config = json.load(f)
+    RAG_OPENAI_API_KEY = private_config.get('RAG_OPENAI_API_KEY', private_config.get('RAG_OPENAI_KEY', ''))
+
     GUI_OPERATOR_LLM_MODEL = config.get('GUI_OPERATOR_LLM_MODEL', 'gui-plus')
     GUI_OPERATOR_LLM_BASE = config.get('GUI_OPERATOR_LLM_BASE', 'https://www.dmxapi.cn/v1/chat/completions')
     PT_EVAL_TRIGGER_ENABLED=config.get('PY_EVAL_TRIGGER_ENABLED', False)
@@ -39,6 +53,23 @@ with open(CONFIG_FILE_PATH, 'r', encoding='utf-8') as f:
     SECURITY_VERIFIER_LLM_API_ENDPOINT = config.get('SECURITY_VERIFIER_API_ENDPOINT', 'https://www.dmxapi.cn/v1')
     SECURITY_VERIFIER_LLM_MODEL = config.get('SECURITY_VERIFIER_LLM_MODEL', 'qwen3.5-flash')
     SECURITY_SYS_ENABLED = config.get('SECURITY_SYS_ENABLED', False)
+    RAG_ENABLED = config.get('RAG_ENABLED', True)
+    RAG_API_URL = config.get('RAG_API_URL', 'http://127.0.0.1:18080')
+    RAG_LLM_BASE_URL = config.get('RAG_LLM_BASE_URL', 'https://www.dmxapi.cn/v1')
+    RAG_CHAT_MODEL = config.get('RAG_CHAT_MODEL', 'qwen3.5-27b')
+    RAG_EMBED_MODEL = config.get('RAG_EMBED_MODEL', 'text-embedding-3-small')
+    RAG_EMBED_DIM = int(config.get('RAG_EMBED_DIM', 1536) or 1536)
+    RAG_EMBED_MAX_TOKEN_SIZE = int(config.get('RAG_EMBED_MAX_TOKEN_SIZE', 8192) or 8192)
+    RAG_AUTO_INDEX_RECORD = config.get('RAG_AUTO_INDEX_RECORD', True)
+    AGENT_ROOT=p_join(CONFIG_ROOT, "agents", AGENT_NAME)
+    return config, private_config
+
+
+def reload_configs():
+    return load_configs()
+
+
+load_configs()
     
 def print_globals():
     print("Current Global Configuration Variables Of Faust:")

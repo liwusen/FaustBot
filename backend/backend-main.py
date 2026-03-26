@@ -24,6 +24,8 @@ import faust_backend.trigger_manager as trigger_manager
 import faust_backend.events as events
 import faust_backend.nimble as nimble
 import faust_backend.minecraft_client as minecraft_client
+import faust_backend.admin_runtime as admin_runtime
+import faust_backend.service_manager as service_manager
 import argparse
 import subprocess
 import tqdm
@@ -46,12 +48,15 @@ forward_queue=queue.Queue()
 agent=None
 agent_lock = asyncio.Lock()
 AGENT_NAME=conf.AGENT_NAME
+PROMPT = ""
 if not os.path.exists(os.path.join("agents",f"{AGENT_NAME}")):
     print(f"[main] Agent file for '{AGENT_NAME}' not found. Please make sure 'agents/{AGENT_NAME}' exists.")
     exit(1)
 AGENT_ROOT=os.path.join("agents",f"{AGENT_NAME}")
 def makeup_init_prompt():
-    global PROMPT
+    global PROMPT, AGENT_ROOT, AGENT_NAME
+    AGENT_NAME = conf.AGENT_NAME
+    AGENT_ROOT=os.path.join("agents",f"{AGENT_NAME}")
     with open(os.path.join(AGENT_ROOT,"AGENT.md"),"r",encoding="utf-8") as f:
         PROMPT=f.read()
     with open(os.path.join(AGENT_ROOT,"ROLE.md"),"r",encoding="utf-8") as f:
@@ -60,8 +65,6 @@ def makeup_init_prompt():
         PROMPT+=f.read()
     with open(os.path.join(AGENT_ROOT,"TASK.md"),"r",encoding="utf-8") as f:
         PROMPT+=f.read()
-    print("[main.startup]PROMPT makeup done.")
-    print("[main.startup]PROMPT content:\n",PROMPT)
 makeup_init_prompt()
 
 THREAD_ID=84
@@ -70,34 +73,122 @@ THREAD_ID=84
 def startServices():
     if args.run_other_backend_services:
         print("[main] Starting other backend services...")
-        for service in tqdm.tqdm(["ASR.bat", "TTS.bat"]):
+        for service in tqdm.tqdm(["asr", "tts", "rag"]):
             print("[service_manager] Starting service:", service)
-            process=subprocess.run([service],check=False)
-            process.stdout=subprocess.DEVNULL
+            try:
+                service_manager.start_service(service, wait=False)
+            except Exception as e:
+                print(f"[service_manager] Failed to start {service}: {e}")
         print("[main] Other backend services started.")
 
 
+def schedule_rag_record_sync(user_text: str, assistant_text: str) -> None:
+    if not getattr(conf, "RAG_ENABLED", True):
+        return
+    if not str(user_text).strip() or not str(assistant_text).strip():
+        return
+    print("[main] Scheduling RAG record sync for new chat history part.")
+    async def _job():
+        try:
+            llm_tools.refresh_runtime_paths()
+            record_path = await llm_tools.RAG_TRACKER.new_chat_history_part(user_text, assistant_text)
+            print(f"[main] Chat record synced into RAG[增量更新模式]: {record_path}")
+        except Exception as exc:
+            print(f"[main] Failed to sync chat record into RAG: {exc}")
+
+    asyncio.create_task(_job())
+
+OVERWRITE_LOCK=True
 async def invoke_agent_locked(target_agent, payload, config=None):
     if config is None:
         config = {"configurable": {"thread_id": THREAD_ID}}
+    print("[main.ai_call]Waiting for lock")
     async with agent_lock:
-        return await target_agent.ainvoke(payload, config)
+        print("[main.ai_call] Start Invoking llm")
+        res=await target_agent.ainvoke(payload, config)
+        print("[main.ai_call] End Invoking llm")
+        return res
 
 
 async def stream_agent_locked(target_agent, payload, config=None):
     if config is None:
         config = {"configurable": {"thread_id": THREAD_ID}}
+    print("[main.ai_call]Waiting for lock")
     async with agent_lock:
+        print("[main.ai_call] Start Invoking llm")
         async for message_chunk, metadata in target_agent.astream(payload, config, stream_mode="messages"):
             if message_chunk.content and metadata.get("langgraph_node")!="tools":
                 yield message_chunk, metadata
-        
+        print("[main.ai_call] End Invoking llm")
 startServices()
+
+
+async def rebuild_runtime(*, reset_dialog: bool = False):
+    print("[main] Rebuilding runtime with reset_dialog =", reset_dialog)
+    global agent, checkpointer, conn, storer, conn_for_store, AGENT_NAME, AGENT_ROOT
+    conf.reload_configs()
+    os.environ["DEEPSEEK_API_KEY"] = conf.DEEPSEEK_API_KEY
+    os.environ["SEARCHAPI_API_KEY"] = conf.SEARCH_API_KEY
+    AGENT_NAME = conf.AGENT_NAME
+    AGENT_ROOT = os.path.join("agents", f"{AGENT_NAME}")
+    print("[main]Rubuilding Target Agent:", AGENT_NAME)
+    if not os.path.exists(AGENT_ROOT):
+        raise FileNotFoundError(f"Agent file for '{AGENT_NAME}' not found. Please make sure 'agents/{AGENT_NAME}' exists.")
+
+    makeup_init_prompt()
+    llm_tools.refresh_runtime_paths()
+    if not args.save_in_memory:
+        try:
+            if 'conn' in globals() and conn:
+                await conn.commit()
+                await conn.close()
+        except Exception:
+            pass
+        try:
+            if 'conn_for_store' in globals() and conn_for_store:
+                await conn_for_store.commit()
+                await conn_for_store.close()
+        except Exception:
+            pass
+        conn = await aiosqlite.connect(pjoin(AGENT_ROOT,'faust_checkpoint.db'))
+        checkpointer=AsyncSqliteSaver(conn=conn)
+        conn_for_store = await aiosqlite.connect(pjoin(AGENT_ROOT,'faust_store.db'))
+        storer=AsyncSqliteStore(conn=conn_for_store)
+        print(f"[main] Checkpoint and store initialized with SQLite for rebuild.\
+               pos_checkpoint: {pjoin(AGENT_ROOT,'faust_checkpoint.db')},\
+               pos_store: {pjoin(AGENT_ROOT,'faust_store.db')}")
+    else:
+        checkpointer=InMemorySaver()
+        storer=InMemoryStore()
+    print("[main] Checkpoint and store initialized for rebuild.")
+    agent = create_agent(model="deepseek-chat",checkpointer=checkpointer,tools=llm_tools.toollist,store=storer)
+    try:
+        await admin_runtime.align_rag_agent(AGENT_NAME)
+    except Exception as e:
+        print(f"[main] RAG agent align skipped: {e}")
+    try:
+        await llm_tools.RAG_TRACKER.recursive_track_dir(str(conf.AGENT_ROOT), blacklist_fnmatch_pattern="*\\diary\\*")
+    except Exception as e:
+        print(f"[main] RAG warmup skipped: {e}")
+    print("[main] Agent recreated for rebuild.")
+    if reset_dialog:
+        await invoke_agent_locked(agent,{"messages":[{"role":"system","content":PROMPT}]})
+    else:
+        await invoke_agent_locked(agent,{"messages":[{"role":"user","content":"配置已重载，请继续当前角色设定工作。"}]})
+    print("[main] Runtime rebuild completed.")
+    return {
+        "agent_name": AGENT_NAME,
+        "agent_root": AGENT_ROOT,
+    }
+
 @app.on_event("startup")
 async def startup_event():
     global agent,checkpointer,conn,storer,conn_for_store
     #--- Initialize the agent and its tools&middleware, including setting up the checkpoint saver and store.
     if not os.path.exists(pjoin(AGENT_ROOT,'faust_checkpoint.db')):
+        print(f"[main] Checkpoint database not found at {pjoin(AGENT_ROOT,'faust_checkpoint.db')}. Starting with a fresh checkpoint.")
+        print("[main.startup]PROMPT makeup done.")
+        print("[main.startup]PROMPT content:\n",PROMPT)
         NOT_INITIALIZED = True
     else:
         NOT_INITIALIZED = False
@@ -114,16 +205,15 @@ async def startup_event():
     #--- Create the agent with the specified model, tools, and checkpoint/store.
     agent=create_agent(model="deepseek-chat",checkpointer=checkpointer,tools=llm_tools.toollist,store=storer)
     print("[main]Agent created with Deepseek-chat model and tools.")
+    llm_tools.refresh_runtime_paths()
     if NOT_INITIALIZED:
         await invoke_agent_locked(agent,{"messages":[{"role":"system","content":PROMPT}]})
     else:
         await invoke_agent_locked(agent,{"messages":[{"role":"user","content":"对话重新开始了"}]})
-    if os.path.exists("faust_main.log"):
-        with open("faust_main.log","r",encoding="utf-8") as f:
-            t=f.readlines()[-5:]
-        print("[Faust.backend.main]日志内容：",t)
-        await invoke_agent_locked(agent,{"messages":[{"role":"user","content":f"这是你自上次对话以来后的日志：{' '.join(t)}"}]})
-    
+    try:
+        await admin_runtime.align_rag_agent(AGENT_NAME)
+    except Exception as e:
+        print(f"[main] Startup RAG initialization skipped: {e}")
     #--- Start the trigger watchdog thread to monitor and activate triggers.
     print("[main] Trigger Watchdog Thread starting...")
     trigger_manager.start_trigger_watchdog_thread()
@@ -133,6 +223,149 @@ async def startup_event():
         print(f"[main] Minecraft bridge not connected on startup: {e}")
     llm_tools.STARTED=True# 声明启动完成
     print("[main]FAUST Backend Main Service started.")
+
+
+@app.get("/faust/admin/config")
+async def admin_get_config():
+    return admin_runtime.get_config_view()
+
+
+@app.post("/faust/admin/config")
+async def admin_save_config(payload: dict):
+    return admin_runtime.save_config(payload or {})
+
+
+@app.post("/faust/admin/config/reload")
+async def admin_reload_config(payload: dict | None = None):
+    info = await rebuild_runtime(reset_dialog=bool((payload or {}).get("reset_dialog", False)))
+    return {
+        "status": "ok",
+        "runtime": info,
+        "summary": admin_runtime.runtime_summary(),
+        "callback": {
+            "type": "runtime_reloaded",
+            "scope": "config",
+            "agent_name": info.get("agent_name"),
+            "reset_dialog": bool((payload or {}).get("reset_dialog", False)),
+        }
+    }
+
+
+@app.get("/faust/admin/runtime")
+async def admin_runtime_summary_api():
+    return {"status": "ok", "runtime": admin_runtime.runtime_summary()}
+
+
+@app.get("/faust/admin/services")
+async def admin_list_services(include_log: bool = False):
+    return {"status": "ok", "items": service_manager.list_services(include_log=include_log)}
+
+
+@app.get("/faust/admin/services/{service_key}")
+async def admin_get_service(service_key: str, include_log: bool = True):
+    return {"status": "ok", "item": service_manager.service_status(service_key, include_log=include_log)}
+
+
+@app.post("/faust/admin/services/{service_key}/start")
+async def admin_start_service(service_key: str):
+    item = service_manager.start_service(service_key)
+    return {"status": "ok", "item": item, "callback": {"type": "service_action", "action": "start", "service_key": service_key}}
+
+
+@app.post("/faust/admin/services/{service_key}/stop")
+async def admin_stop_service(service_key: str):
+    item = service_manager.stop_service(service_key)
+    return {"status": "ok", "item": item, "callback": {"type": "service_action", "action": "stop", "service_key": service_key}}
+
+
+@app.post("/faust/admin/services/{service_key}/restart")
+async def admin_restart_service(service_key: str):
+    item = service_manager.restart_service(service_key)
+    return {"status": "ok", "item": item, "callback": {"type": "service_action", "action": "restart", "service_key": service_key}}
+
+
+@app.post("/faust/admin/runtime/reload-agent")
+async def admin_reload_agent():
+    info = await rebuild_runtime(reset_dialog=False)
+    return {
+        "status": "ok",
+        "runtime": info,
+        "callback": {
+            "type": "runtime_reloaded",
+            "scope": "agent",
+            "agent_name": info.get("agent_name"),
+            "reset_dialog": False,
+        }
+    }
+
+
+@app.post("/faust/admin/runtime/reload-all")
+async def admin_reload_all():
+    info = await rebuild_runtime(reset_dialog=True)
+    return {
+        "status": "ok",
+        "runtime": info,
+        "callback": {
+            "type": "runtime_reloaded",
+            "scope": "all",
+            "agent_name": info.get("agent_name"),
+            "reset_dialog": True,
+        }
+    }
+
+
+@app.get("/faust/admin/agents")
+async def admin_list_agents():
+    return {"items": admin_runtime.list_agents()}
+
+
+@app.post("/faust/admin/agents")
+async def admin_create_agent(payload: dict):
+    agent_name = (payload or {}).get("agent_name")
+    template_agent = (payload or {}).get("template_agent")
+    detail = admin_runtime.create_agent(agent_name, template_agent=template_agent)
+    return {"status": "ok", "detail": detail}
+
+
+@app.get("/faust/admin/agents/{agent_name}")
+async def admin_get_agent(agent_name: str):
+    return {"status": "ok", "detail": admin_runtime.get_agent_detail(agent_name)}
+
+
+@app.put("/faust/admin/agents/{agent_name}/files")
+async def admin_save_agent_files(agent_name: str, payload: dict):
+    files = (payload or {}).get("files") or {}
+    updated = admin_runtime.save_agent_files(agent_name, files)
+    return {"status": "ok", "files": updated}
+
+
+@app.delete("/faust/admin/agents/{agent_name}")
+async def admin_delete_agent(agent_name: str):
+    admin_runtime.delete_agent(agent_name)
+    return {"status": "ok", "deleted": agent_name}
+
+
+@app.post("/faust/admin/agents/switch")
+async def admin_switch_agent(payload: dict):
+    agent_name = (payload or {}).get("agent_name")
+    result = await admin_runtime.switch_agent(agent_name)
+    info = await rebuild_runtime(reset_dialog=True)
+    return {
+        "status": "ok",
+        "switch": result,
+        "runtime": info,
+        "callback": {
+            "type": "runtime_reloaded",
+            "scope": "agent_switch",
+            "agent_name": info.get("agent_name"),
+            "reset_dialog": True,
+        }
+    }
+
+
+@app.get("/faust/admin/live2d/models")
+async def admin_list_live2d_models():
+    return {"items": admin_runtime.list_available_models()}
     
 @app.post("/faust/chat")
 #@deprecated(reason="This endpoint is kept for compatibility and development but the primary chat interface is now the websocket /faust/chat for frontend streaming.")
@@ -153,6 +386,7 @@ async def chat_post(payload: dict):
         events.ignore_trigger_event.set()
         resp = await invoke_agent_locked(agent,{"messages":[{"role":"user","content":text}]})
         reply = resp["messages"][-1].content
+        schedule_rag_record_sync(text, reply)
         print('Chat post reply', reply)
         events.ignore_trigger_event.clear()
         return {"reply": reply,"warning": "使用websocket /faust/chat接口以获得更好的前端流式体验和更低的延迟。"}
@@ -191,6 +425,7 @@ async def chat_websocket(websocket: WebSocket):
                         reply += message_chunk.content
                         print(message_chunk.content, end="|", flush=True)
                         await websocket.send_text(json.dumps({"type": "delta", "content": message_chunk.content}, ensure_ascii=False))
+                schedule_rag_record_sync(text, reply)
                 await websocket.send_text(json.dumps({"type": "done", "reply": reply}, ensure_ascii=False))
                 print()
                 events.ignore_trigger_event.clear()
@@ -244,7 +479,7 @@ async def command_websocket(websocket: WebSocket):
                 resp = await invoke_agent_locked(agent,{"messages":[{"role":"system","content":trigger_text}]})
                 reply = resp["messages"][-1].content
                 print('Trigger activated reply', reply)
-                await websocket.send_text(f"TTS {reply}")
+                await websocket.send_text(f"SAY {reply}")
             if not forward_queue.empty():
                 command=forward_queue.get()
                 print("[main] Forwarding command from queue:",command)

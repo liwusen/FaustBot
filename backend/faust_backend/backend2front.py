@@ -12,6 +12,8 @@ FrontEndTaskQueue = queue.Queue()
 def _push_command(command: str, payload=None):
     if payload is None:
         FrontEndTaskQueue.put(command)
+    elif isinstance(payload, str):
+        FrontEndTaskQueue.put(command + " " + payload)
     else:
         FrontEndTaskQueue.put(command + " " + json.dumps(payload, ensure_ascii=False))
     events.backend2frontendQueue_event.set()

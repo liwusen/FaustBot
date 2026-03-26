@@ -28,6 +28,8 @@
   const textChatInput = document.getElementById('textChatInput');
   const textChatSendBtn = document.getElementById('textChatSendBtn');
   const textChatStatus = document.getElementById('textChatStatus');
+  const trayToggleBtn = document.getElementById('trayToggleBtn');
+  const openConfigBtn = document.getElementById('openConfigBtn');
   const quickController = document.getElementById('modelQuickController');
   const quickToggleAsrBtn = document.getElementById('quickToggleAsr');
   const quickStopMediaBtn = document.getElementById('quickStopMedia');
@@ -49,6 +51,7 @@
   let asrBubbleTargetY = 0;
   let asrBubbleInitialized = false;
   let asrBubbleSource = 'ai';
+  let asrTextPinnedToBottom = true;
 
   function ensureNimbleHost(){
     let host = document.getElementById('nimble-host');
@@ -242,7 +245,7 @@
       const b = currentModel.getBounds();
       const scaleX = canvasRect.width / app.renderer.width;
       const scaleY = canvasRect.height / app.renderer.height;
-      const left = canvasRect.left + b.x * scaleX+300;
+      const left = canvasRect.left + b.x * scaleX+scaleX * b.width * 0.4;
       const top = canvasRect.top + b.y * scaleY;
       const height = b.height * scaleY;
       quickController.style.left = Math.round(left - 12) + 'px';
@@ -532,6 +535,20 @@
   let streamTtsPlaybackPromise = null;
   const streamTtsSentenceEndRe = /[。！？!?；;]+$/;
 
+  function decodeWsPayload(data){
+    if (typeof data === 'string') return data;
+    try{
+      if (data instanceof ArrayBuffer) return new TextDecoder('utf-8').decode(data);
+      if (ArrayBuffer.isView(data)) return new TextDecoder('utf-8').decode(data);
+      if (data && typeof Blob !== 'undefined' && data instanceof Blob) {
+        return data.text();
+      }
+    }catch(e){
+      console.warn('decodeWsPayload failed, fallback to String(data)', e);
+    }
+    return String(data ?? '');
+  }
+
   // --- handle incoming faust commands forwarded from main process ---
   // Commands are simple text payloads like:
   //   PLAYMUSIC <filename>
@@ -768,8 +785,12 @@
 
   async function handleChatWsMessage(ev){
     if (!currentChatRequest) return;
+    let raw = ev.data;
+    if (raw && typeof raw !== 'string') {
+      raw = await decodeWsPayload(raw);
+    }
     let msg = null;
-    try{ msg = JSON.parse(ev.data); }catch(e){ msg = { type: 'error', error: String(e) }; }
+    try{ msg = JSON.parse(raw); }catch(e){ msg = { type: 'error', error: String(e) }; }
     if (!msg) return;
 
     if (msg.type === 'start'){
@@ -881,23 +902,44 @@
     return `AI:${raw}`;
   }
 
+  function rememberAsrScrollIntent(){
+    if (!asrTextEl) return;
+    const threshold = 18;
+    const distanceToBottom = asrTextEl.scrollHeight - asrTextEl.scrollTop - asrTextEl.clientHeight;
+    asrTextPinnedToBottom = distanceToBottom <= threshold;
+  }
+
+  function scrollAsrTextToBottom(force = false){
+    if (!asrTextEl) return;
+    if (force || asrTextPinnedToBottom){
+      asrTextEl.scrollTop = asrTextEl.scrollHeight;
+      asrTextPinnedToBottom = true;
+    }
+  }
+
   function showResultBubble(source, text){
     if (!asrTextEl) return;
     asrBubbleSource = source || 'ai';
     asrTextEl.dataset.source = asrBubbleSource;
     const formatted = formatResultBubbleText(asrBubbleSource, text);
+    rememberAsrScrollIntent();
     asrTextEl.style.display = formatted ? 'block' : 'none';
     asrTextEl.textContent = formatted;
-    if (formatted) updateAsrTextPosition(true);
+    if (formatted) {
+      updateAsrTextPosition(true);
+      scrollAsrTextToBottom();
+    }
   }
 
   function showAsrText(text){
     if (!asrTextEl) return;
+    rememberAsrScrollIntent();
     asrTextEl.style.display = text ? 'block' : 'none';
     asrTextEl.dataset.source = 'ai';
     asrBubbleSource = 'ai';
     asrTextEl.textContent = formatResultBubbleText('ai', text || '');
     updateAsrTextPosition(true);
+    scrollAsrTextToBottom();
   }
 
   function updateAsrTextPosition(forceSnap = false){
@@ -1686,6 +1728,7 @@
     });
   }
   if (asrTextEl){
+    asrTextEl.addEventListener('scroll', ()=>{ rememberAsrScrollIntent(); });
     asrTextEl.addEventListener('mouseenter', ()=>{
       if (clickThroughController) clickThroughController.forceInteractive();
     });
@@ -1693,5 +1736,16 @@
       if (clickThroughController) clickThroughController.forceInteractive();
     }, { passive: true });
   }
+  if (trayToggleBtn) trayToggleBtn.addEventListener('click', async ()=>{
+    try{
+      if (window.api && window.api.hideToTray) await window.api.hideToTray();
+    }catch(e){ console.warn('hideToTray failed', e); }
+  });
+
+  if (openConfigBtn) openConfigBtn.addEventListener('click', async ()=>{
+    try{
+      if (window.api && window.api.openConfigWindow) await window.api.openConfigWindow();
+    }catch(e){ console.warn('openConfigWindow failed', e); }
+  });
   updateQuickAsrButton();
 })();

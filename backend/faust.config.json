@@ -5,5 +5,20 @@
     "SECURITY_VERIFIER_API_ENDPOINT": "https://www.dmxapi.cn/v1",
     "SECURITY_VERIFIER_LLM_MODEL": "qwen3.5-flash",
     "SECURITY_SYS_ENABLED": false,
-    "RAG_ENABLED": true
+    "RAG_ENABLED": true,
+    "RAG_API_URL": "http://127.0.0.1:18080",
+    "RAG_LLM_BASE_URL": "https://www.dmxapi.cn/v1",
+    "RAG_CHAT_MODEL": "qwen3.5-27b",
+    "RAG_EMBED_MODEL": "text-embedding-3-small",
+    "RAG_EMBED_DIM": 1536,
+    "RAG_EMBED_MAX_TOKEN_SIZE": 8192,
+    "RAG_AUTO_INDEX_RECORD": true,
+    "MC_OPERATOR_URL": "ws://127.0.0.1:18901",
+    "MC_EVENT_TRIGGER_ENABLED": true,
+    "LIVE2D_MODEL_PATH": "2D/hiyori_pro_zh/hiyori_pro_t11.model3.json",
+    "LIVE2D_MODEL_SCALE": 0.2,
+    "LIVE2D_MODEL_X": "",
+    "LIVE2D_MODEL_Y": "",
+    "FRONTEND_CLICK_THROUGH": true,
+    "FRONTEND_DEFAULT_TTS_LANG": "zh"
 }

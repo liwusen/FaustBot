@@ -31,7 +31,16 @@ STARTED=False
 ORIGINAL_TOOL_FUNCS={}
 RAG_ASYNC_RESULTS: dict[str, dict] = {}
 RAG_ASYNC_LOCK = threading.Lock()
-RAG_TRACKER = rag_client.docTracker()
+RAG_TRACKER = rag_client.create_tracker()
+
+
+def refresh_runtime_paths() -> None:
+    global DIARY_DIR, RAG_TRACKER
+    DIARY_DIR = Path("agents") / Path(conf.AGENT_NAME) / "diary"
+    if hasattr(RAG_TRACKER, "refresh_runtime"):
+        RAG_TRACKER.refresh_runtime(conf.AGENT_ROOT, getattr(conf, "RAG_API_URL", None))
+    else:
+        RAG_TRACKER = rag_client.create_tracker(conf.AGENT_ROOT, getattr(conf, "RAG_API_URL", None))
 #define add to TOOLLIST wrapper
 def __init__():
     print("[llm_tools] Initializing llm_tools module...")

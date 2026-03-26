@@ -1,8 +1,36 @@
-const { app, BrowserWindow, ipcMain, globalShortcut } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, Tray, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
 let mainWindow = null;
+let configWindow = null;
+let tray = null;
+
+function decodeWsTextMessage(data, isBinary = false) {
+  if (typeof data === 'string') return data;
+
+  try {
+    if (Buffer.isBuffer(data)) {
+      return data.toString('utf8');
+    }
+
+    if (data instanceof ArrayBuffer) {
+      return Buffer.from(data).toString('utf8');
+    }
+
+    if (ArrayBuffer.isView(data)) {
+      return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString('utf8');
+    }
+
+    if (isBinary && data && typeof data.toString === 'function') {
+      return data.toString('utf8');
+    }
+  } catch (e) {
+    console.error('[faust-ws] utf8 decode failed, fallback to String(data)', e);
+  }
+
+  return String(data ?? '');
+}
 
 const GLOBAL_SHORTCUTS = [
   { accelerator: 'CommandOrControl+Alt+A', command: 'TOGGLE_ASR' },
@@ -81,8 +109,92 @@ function createWindow(){
   mainWindow.setAlwaysOnTop(true, 'screen-saver');
 }
 
+function createConfigWindow(){
+  if (configWindow && !configWindow.isDestroyed()) {
+    configWindow.show();
+    configWindow.focus();
+    return configWindow;
+  }
+
+  configWindow = new BrowserWindow({
+    width: 1240,
+    height: 860,
+    minWidth: 980,
+    minHeight: 700,
+    title: 'Faust 配置中心',
+    backgroundColor: '#0b1020',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    }
+  });
+
+  configWindow.loadFile(path.join(__dirname, 'config-window.html'));
+  configWindow.on('closed', ()=>{ configWindow = null; });
+  return configWindow;
+}
+
+function getTrayIconPath(){
+  const candidates = [
+    path.join(__dirname, '..', '..', 'live-2d', 'fake_neuro.ico'),
+    path.join(__dirname, '..', '..', 'image', 'dmx1.png'),
+  ];
+  return candidates.find((candidate)=> fs.existsSync(candidate)) || null;
+}
+
+function showMainWindow(){
+  if (!mainWindow) return false;
+  try{
+    mainWindow.show();
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.setSkipTaskbar(false);
+    mainWindow.setAlwaysOnTop(true, 'screen-saver');
+    mainWindow.focus();
+    return true;
+  }catch(e){
+    console.error('showMainWindow failed', e);
+    return false;
+  }
+}
+
+function hideMainWindowToTray(){
+  if (!mainWindow) return false;
+  try{
+    mainWindow.hide();
+    mainWindow.setSkipTaskbar(true);
+    return true;
+  }catch(e){
+    console.error('hideMainWindowToTray failed', e);
+    return false;
+  }
+}
+
+function createTray(){
+  if (tray) return tray;
+  const trayIconPath = getTrayIconPath();
+  if (!trayIconPath) {
+    console.warn('Tray icon not found, tray feature disabled.');
+    return null;
+  }
+
+  tray = new Tray(trayIconPath);
+  tray.setToolTip('Faust Live2D');
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: '显示前端', click: ()=> showMainWindow() },
+    { label: '打开配置中心', click: ()=> createConfigWindow() },
+    { label: '隐藏到托盘', click: ()=> hideMainWindowToTray() },
+    { type: 'separator' },
+    { label: '退出', click: ()=> app.quit() },
+  ]));
+  tray.on('double-click', ()=>{ showMainWindow(); });
+  return tray;
+}
+
 app.whenReady().then(()=>{
   createWindow();
+  createTray();
   registerGlobalShortcuts();
   // Start WebSocket command client (main process)
   startCommandWS();
@@ -138,6 +250,20 @@ ipcMain.handle('focus-main-window', () => {
   }
 });
 
+ipcMain.handle('hide-to-tray', () => {
+  createTray();
+  return hideMainWindowToTray();
+});
+
+ipcMain.handle('show-from-tray', () => {
+  return showMainWindow();
+});
+
+ipcMain.handle('open-config-window', () => {
+  createConfigWindow();
+  return true;
+});
+
 // allow renderer to send log messages to main process console
 ipcMain.handle('faust-log', async (evt, msg) => {
   try{
@@ -150,6 +276,7 @@ app.on('window-all-closed', ()=>{ if (process.platform !== 'darwin') app.quit() 
 
 app.on('will-quit', ()=>{
   try{ globalShortcut.unregisterAll(); }catch(e){ console.error('unregisterAll failed', e); }
+  try{ if (tray) { tray.destroy(); tray = null; } }catch(e){ console.error('tray destroy failed', e); }
 });
 
 // Try to load a WebSocket implementation for the main process.
@@ -185,8 +312,8 @@ function startCommandWS(){
       console.log('[faust-ws] connected to', url);
     });
 
-    ws.on('message', (data) => {
-      const text = data && data.toString ? data.toString() : String(data);
+    ws.on('message', (data, isBinary) => {
+      const text = decodeWsTextMessage(data, isBinary);
       console.log('[faust-ws] message:', text);
       try{
         // forward raw text to renderer

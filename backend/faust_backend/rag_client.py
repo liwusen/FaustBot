@@ -15,6 +15,7 @@ from aiohttp import ClientResponseError
 DEFAULT_RAG_BASE_URL = "http://127.0.0.1:18080"
 import fnmatch
 import os
+import datetime
 
 
 def _ensure_text_payload(text: str) -> str:
@@ -45,10 +46,17 @@ class docTracker():
             self.md5 = md5
             self.create_time = create_time
             self.update_time = update_time
-    datafile:str=Path(conf.AGENT_ROOT) / "rag_doc_tracker.json"
-    mem_record_file:str=Path(conf.AGENT_ROOT) / "rag_chat_history_records.json"
     verbosity:bool=False
-    def __init__(self):
+    def __init__(self, agent_root: str | Path | None = None, base_url: str | None = None):
+        self.refresh_runtime(agent_root=agent_root, base_url=base_url)
+
+    def refresh_runtime(self, agent_root: str | Path | None = None, base_url: str | None = None):
+        self.agent_root = Path(agent_root or conf.AGENT_ROOT)
+        self.base_url = base_url or getattr(conf, "RAG_API_URL", DEFAULT_RAG_BASE_URL)
+        self.datafile = self.agent_root / "rag_doc_tracker.json"
+        self.mem_record_file = self.agent_root / "rag_chat_history_records.json"
+        self.record_dir = self.agent_root / "record"
+        self.record_dir.mkdir(parents=True, exist_ok=True)
         self.doc_info_map: Dict[str, docTracker.DocInfo] = {}
         self._load_from_file()
     
@@ -65,6 +73,7 @@ class docTracker():
         }
 
     def _load_from_file(self):
+        self.datafile.parent.mkdir(parents=True, exist_ok=True)
         if Path(self.datafile).exists():
             with open(self.datafile, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -85,7 +94,7 @@ class docTracker():
             if not Path(file_path).exists():
                 to_delete.append((file_path, doc_info.doc_id))
         for file_path, doc_id in to_delete:
-            await rag_delete_document(doc_id)
+            await rag_delete_document(doc_id, base_url=self.base_url)
             del self.doc_info_map[file_path]
             if self.verbosity:
                 print(f"[RAG Tracker] Deleted document for non-existent file {file_path} with doc_id {doc_id}")
@@ -106,8 +115,8 @@ class docTracker():
                 doc_info.md5 = md5
                 doc_info.update_time = now_time
                 if not dry_run:
-                    await rag_delete_document(current_doc_id)
-                    await rag_insert_document(file_text, doc_id=new_doc_id, file_path=file_path)
+                    await rag_delete_document(current_doc_id, base_url=self.base_url)
+                    await rag_insert_document(file_text, doc_id=new_doc_id, file_path=file_path, base_url=self.base_url)
                 doc_info.doc_id = new_doc_id
                 if self.verbosity:
                     print(f"[RAG Tracker] Updated document for {file_path} with doc_id {doc_info.doc_id}")
@@ -117,7 +126,7 @@ class docTracker():
             new_doc_id = pathlib.Path(file_path).name+"_"+str(int(now_time))
             self.doc_info_map[file_path] = docTracker.DocInfo(new_doc_id, file_path, md5, now_time, now_time)
             if not dry_run:
-                await rag_insert_document(file_text, doc_id=self.doc_info_map[file_path].doc_id, file_path=file_path)
+                await rag_insert_document(file_text, doc_id=self.doc_info_map[file_path].doc_id, file_path=file_path, base_url=self.base_url)
             if self.verbosity:
                 print(f"[RAG Tracker] Inserted new document for {file_path} with doc_id {self.doc_info_map[file_path].doc_id}")
         self._save_to_file()
@@ -128,7 +137,7 @@ class docTracker():
         file_path = str(Path(file_path).resolve())
         if file_path in self.doc_info_map:
             doc_id = self.doc_info_map[file_path].doc_id
-            asyncio.run(rag_delete_document(doc_id))
+            asyncio.run(rag_delete_document(doc_id, base_url=self.base_url))
             del self.doc_info_map[file_path]
             self._save_to_file()
             if self.verbosity:
@@ -144,9 +153,16 @@ class docTracker():
                     path.suffix in allowed_suffixes and \
                     (blacklist_fnmatch_pattern is None or not fnmatch.fnmatch(str(path), blacklist_fnmatch_pattern)):
                     await self.declareUpdateDoc(str(path))
-    async def new_chat_history_part(self,text):
+    async def new_chat_history_part(self,user_input:str,text:str):
         now_time = time.time()
-        await rag_insert_document(text, doc_id="__CHAT_HISTORY__"+(doc_id:=str(int(now_time))), file_path="__MEM__")
+        SAVE=f"""
+        用户输入: {user_input}
+        助手回复: {text}
+        """
+        print(f"[RAG Tracker] Adding new chat history part to RAG with doc_id __CHAT_HISTORY__{str(int(now_time))}")
+        print(f"[RAG Tracker] Chat history content:\n{SAVE}")
+        await rag_insert_document(SAVE, doc_id="__CHAT_HISTORY__"+(doc_id:=str(int(now_time))), file_path="__MEM__", base_url=self.base_url)
+        self.append_chat_record(user_input, text)
         record = {
             "text": text,
             "timestamp": now_time,
@@ -167,14 +183,36 @@ class docTracker():
             for record in data:
                 doc_id = record.get("doc_id")
                 if doc_id:
-                    await rag_delete_document(doc_id)
+                    await rag_delete_document(doc_id, base_url=self.base_url)
             Path(self.mem_record_file).unlink()
         else:
             if self.verbosity:
                 print("[RAG Tracker] No chat history records to clear.")
+
+    def append_chat_record(self, user_text: str, assistant_text: str, when: datetime.datetime | None = None) -> Path:
+        now = when or datetime.datetime.now()
+        record_path = self.record_dir / f"{now.strftime('%Y%m%d')}.md"
+        record_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(record_path, "a", encoding="utf-8") as f:
+            f.write(f"## {now.strftime('%H:%M:%S')}\n\n")
+            f.write(f"**用户**\n\n{str(user_text).strip()}\n\n")
+            f.write(f"**Faust**\n\n{str(assistant_text).strip()}\n\n")
+        return record_path
+
+    async def append_and_index_chat_record(self, user_text: str, assistant_text: str) -> str:
+        record_path = self.append_chat_record(user_text, assistant_text)
+        if getattr(conf, "RAG_ENABLED", True) and getattr(conf, "RAG_AUTO_INDEX_RECORD", True):
+            await self.declareUpdateDoc(str(record_path))
+        return str(record_path)
+
     def _save_to_file(self):
+        Path(self.datafile).parent.mkdir(parents=True, exist_ok=True)
         with open(self.datafile, "w", encoding="utf-8") as f:
             json.dump(self._to_dict(), f, ensure_ascii=False, indent=4)
+
+
+def create_tracker(agent_root: str | Path | None = None, base_url: str | None = None) -> docTracker:
+    return docTracker(agent_root=agent_root, base_url=base_url)
 
 async def _json_request(method: str, url: str, payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
     if aiohttp is not None:
@@ -334,11 +372,16 @@ async def demo(basic_test:bool=False):
     await test_doc_tracker.clear_not_exist_docs()
 
 
-    await test_doc_tracker.new_chat_history_part("这是第一条聊天记录。")
-    await test_doc_tracker.new_chat_history_part("这是第二条聊天记录。")
-    await test_doc_tracker.new_chat_history_part("这是第三条聊天记录。")
+    await test_doc_tracker.new_chat_history_part("你好","这是第一条聊天记录。")
+    await test_doc_tracker.new_chat_history_part("你好","这是第二条聊天记录。")
+    await test_doc_tracker.new_chat_history_part("你好","这是第三条聊天记录。")
+
 
     print("\nTesting chat history tracking...")
     print("RAG result for '聊天记录':", await rag_query("聊天记录", only_need_context=True))
+    if os.path.exists(test_doc_tracker.mem_record_file):
+        with open(test_doc_tracker.mem_record_file, "r", encoding="utf-8") as f:
+            chat_records = json.load(f)
+            print("Chat History Records:", chat_records)
 if __name__ == "__main__":
     asyncio.run(demo())
