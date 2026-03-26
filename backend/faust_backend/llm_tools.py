@@ -831,7 +831,7 @@ def ragQueryTool(query: str, mode: str = "hybrid", only_need_context: bool = Tru
 @add_to_tool_list
 @tool
 @record_func_name
-def ragQueryAsyncStartTool(query: str, mode: str = "hybrid", only_need_context: bool = True) -> str:
+async def ragQueryAsyncStartTool(query: str, mode: str = "hybrid", only_need_context: bool = True) -> str:
     """
     Description:
         启动一个异步 RAG 查询任务，立即返回 rag_callback_id，不阻塞当前对话。
@@ -891,6 +891,27 @@ def ragQueryAsyncGetTool(rag_callback_id: str) -> str:
         return str(result.get("result", ""))
     except Exception as e:
         return f"获取 RAG 异步查询结果失败: {str(e)}"
+@add_to_tool_list
+@tool
+@record_func_name
+def ragDeclareFileUpdateTool(file_path:str)->str:
+    """用于将一个文件加入RAG系统的更新声明工具。当你修改了某个文件的内容，并希望 RAG 系统能够尽快地将这个更新纳入检索范围时，可以调用此工具声明文件已更新。
+
+    Args:
+        file_path (str): 要加入RAG系统的文件绝对路径。
+
+    Returns:
+        str: 结果说明
+
+        注意：
+        这个工具是非阻塞工具。调用后你不应假设文件已经被处理完成；
+    """    
+    try:
+
+        asyncio.create_task(RAG_TRACKER.declareUpdateDoc(file_path))
+        return f"已声明文件更新，路径: {file_path}。RAG系统会尽快处理这个更新，但请注意这是一个非阻塞操作，文件可能尚未被完全处理。"
+    except Exception as e:
+        return f"声明文件更新失败: {str(e)}"
 
 
 @add_to_tool_list

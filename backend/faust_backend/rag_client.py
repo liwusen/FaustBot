@@ -367,7 +367,7 @@ async def demo(basic_test:bool=False):
         f.write("# 测试文档\n这是一个测试文档，用于验证 docTracker 的功能。")
     await test_doc_tracker.declareUpdateDoc("./test.md")
     print("\nTesting docTracker with test.md...")
-    print("RAG result:", await rag_query("陪伴在桌面", only_need_context=True))#这里不应该搜索到结果
+    print("RAG result:", await rag_query("陪伴在桌面", only_need_context=True))
     os.remove("test.md")
     await test_doc_tracker.clear_not_exist_docs()
 
@@ -378,7 +378,7 @@ async def demo(basic_test:bool=False):
 
 
     print("\nTesting chat history tracking...")
-    print("RAG result for '聊天记录':", await rag_query("聊天记录", only_need_context=True))
+    print("RAG result for '聊天记录':\n", await rag_query("聊天记录", only_need_context=True),end="\n===聊天记录结束===\n")
     if os.path.exists(test_doc_tracker.mem_record_file):
         with open(test_doc_tracker.mem_record_file, "r", encoding="utf-8") as f:
             chat_records = json.load(f)

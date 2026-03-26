@@ -281,13 +281,17 @@ class AgentStorage:
         for item in chunk_items:
             self.chunks_meta[item["__id__"]] = item
         self.flush_meta()
-
+    def _limit_summary_length(self,summary):
+        if len(summary)>200:
+            return summary[0:190]+"......"
+        else:
+            return summary
     def all_documents(self) -> list[DocumentRecord]:
         return [
             DocumentRecord(
                 doc_id=doc_id,
                 status=str(item.get("status", "processed")),
-                content_summary=str(item.get("content_summary", "") or ""),
+                content_summary=self._limit_summary_length((item.get("content_summary", "") or "")),
                 content_length=int(item.get("content_length", 0) or 0),
                 created_at=item.get("created_at"),
                 updated_at=item.get("updated_at"),
