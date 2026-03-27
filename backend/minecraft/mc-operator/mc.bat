@@ -1,3 +1,5 @@
+@echo off
+title FAUST Backend Minecraft Operator Service
 cd /d %~dp0
 echo FAUST Backend Minecraft Operator Starting...
-node src/index.js>log.log 2>&1
+node src/index.js > log.log 2>&1

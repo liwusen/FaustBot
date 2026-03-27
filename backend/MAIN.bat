@@ -1,5 +1,6 @@
 @echo off
 cd %~dp0
+title FAUST Backend MAIN Service
 echo FAUST Backend MAIN Service Starting...
 echo Activating conda environment 'my-neuro'...
 conda activate my-neuro && python backend-main.py

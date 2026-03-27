@@ -65,6 +65,8 @@ SERVICES: List[Dict[str, Any]] = [
     }
 ]
 
+def get_service_keys():
+    return [service['key'] for service in SERVICES]
 
 def _service_map() -> Dict[str, Dict[str, Any]]:
     return {item['key']: item for item in SERVICES}
@@ -123,9 +125,9 @@ def start_service(service_key: str, wait: bool = True):
     subprocess.Popen(
         ['cmd', '/c', str(cmd)],
         cwd=str(cmd.parent),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        creationflags=CREATE_NEW_CONSOLE,
+        # stdout=subprocess.DEVNULL,
+        # stderr=subprocess.DEVNULL,
+        creationflags=subprocess.CREATE_NO_WINDOW,
         shell=False,
     )
     if wait:

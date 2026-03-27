@@ -25,6 +25,8 @@ _pending: dict[str, dict[str, Any]] = {}
 _pending_lock = threading.Lock()
 _loop: asyncio.AbstractEventLoop | None = None
 _started = False
+_event_rate_limit_lock = threading.Lock()
+_hurted_last_trigger_ts = 0.0
 
 _verbosity = True
 
@@ -74,9 +76,18 @@ def _on_message(ws, message: str):
     if msg_type == "command_result":
         _resolve_pending(payload.get("request_id", ""), bool(payload.get("ok")), payload)
     elif msg_type == "event":
-        print(f"[Faust.minecraft_client] Received event: {payload.get('event_name', 'unknown')}, payload: {payload.get('payload', {})}")
+        event_name = payload.get("event_name", "unknown")
+        event_payload = payload.get("payload", {})
+        print(f"[Faust.minecraft_client] Received event: {event_name}, payload: {event_payload}")
         if MC_EVENT_TRIGGER_ENABLED:
-            trigger_manager.append_trigger(_make_trigger_for_event(payload.get("event_name", "unknown"), payload.get("payload", {})))
+            if event_name == "hurted":
+                global _hurted_last_trigger_ts
+                now = time.monotonic()
+                with _event_rate_limit_lock:
+                    if now - _hurted_last_trigger_ts < 13:
+                        return
+                    _hurted_last_trigger_ts = now
+            trigger_manager.append_trigger(_make_trigger_for_event(event_name, event_payload))
     elif msg_type == "hello":
         pass
 

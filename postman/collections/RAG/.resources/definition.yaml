@@ -1,0 +1,6 @@
+$kind: collection
+name: RAG
+description: |-
+  # RAG 后端服务的接口
+
+  ## 支持通过 doc_id CRUD操作

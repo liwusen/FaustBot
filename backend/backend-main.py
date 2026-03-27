@@ -1,5 +1,4 @@
 print("[main]Starting")
-import requests
 from fastapi import FastAPI,WebSocket, WebSocketDisconnect
 import json
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,11 +25,11 @@ import faust_backend.nimble as nimble
 import faust_backend.minecraft_client as minecraft_client
 import faust_backend.admin_runtime as admin_runtime
 import faust_backend.service_manager as service_manager
-import argparse
-import subprocess
 import tqdm
 from os.path import join as pjoin
 from faust_backend.config_loader import args
+import time
+print("[main]Libs Loaded")
 #Shared Events
 app = FastAPI()
 uvicorn_server = None
@@ -71,14 +70,14 @@ THREAD_ID=84
 # HTTP POST chat endpoint
 #agent.invoke({"messages":[{"role":"system","content":PROMPT}]},{"configurable":{"thread_id":THREAD_ID}})
 def startServices():
-    if args.run_other_backend_services:
-        print("[main] Starting other backend services...")
-        for service in tqdm.tqdm(["asr", "tts", "rag"]):
-            print("[service_manager] Starting service:", service)
+    if not args.no_run_other_backend_services:
+        print("[main] Starting backend services...")
+        for service in tqdm.tqdm(service_manager.get_service_keys(), desc="[main]Starting services"):
             try:
                 service_manager.start_service(service, wait=False)
             except Exception as e:
                 print(f"[service_manager] Failed to start {service}: {e}")
+            time.sleep(0.5)
         print("[main] Other backend services started.")
 
 
@@ -102,7 +101,7 @@ OVERWRITE_LOCK=True
 async def invoke_agent_locked(target_agent, payload, config=None):
     if config is None:
         config = {"configurable": {"thread_id": THREAD_ID}}
-    print("[main.ai_call]Waiting for lock")
+    print("[main.ai_call] Waiting for lock")
     async with agent_lock:
         print("[main.ai_call] Start Invoking llm")
         res=await target_agent.ainvoke(payload, config)
@@ -113,7 +112,7 @@ async def invoke_agent_locked(target_agent, payload, config=None):
 async def stream_agent_locked(target_agent, payload, config=None):
     if config is None:
         config = {"configurable": {"thread_id": THREAD_ID}}
-    print("[main.ai_call]Waiting for lock")
+    print("[main.ai_call] Waiting for lock")
     async with agent_lock:
         print("[main.ai_call] Start Invoking llm")
         async for message_chunk, metadata in target_agent.astream(payload, config, stream_mode="messages"):
@@ -166,15 +165,11 @@ async def rebuild_runtime(*, reset_dialog: bool = False):
         await admin_runtime.align_rag_agent(AGENT_NAME)
     except Exception as e:
         print(f"[main] RAG agent align skipped: {e}")
-    try:
-        await llm_tools.RAG_TRACKER.recursive_track_dir(str(conf.AGENT_ROOT), blacklist_fnmatch_pattern="*\\diary\\*")
-    except Exception as e:
-        print(f"[main] RAG warmup skipped: {e}")
     print("[main] Agent recreated for rebuild.")
     if reset_dialog:
         await invoke_agent_locked(agent,{"messages":[{"role":"system","content":PROMPT}]})
     else:
-        await invoke_agent_locked(agent,{"messages":[{"role":"user","content":"配置已重载，请继续当前角色设定工作。"}]})
+        await invoke_agent_locked(agent,{"messages":[{"role":"user","content":f"配置已重载，请继续当前角色设定工作。\n 如果你需要重新了解你的角色设定，请读取agents/{AGENT_NAME}/AGENT.md、ROLE.md、COREMEMORY.md、TASK.md等文件来获取最新的设定内容。"}]})
     print("[main] Runtime rebuild completed.")
     return {
         "agent_name": AGENT_NAME,

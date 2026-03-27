@@ -903,13 +903,12 @@ def ragDeclareFileUpdateTool(file_path:str)->str:
     Returns:
         str: 结果说明
 
-        注意：
+    注意：
         这个工具是非阻塞工具。调用后你不应假设文件已经被处理完成；
     """    
     try:
-
-        asyncio.create_task(RAG_TRACKER.declareUpdateDoc(file_path))
-        return f"已声明文件更新，路径: {file_path}。RAG系统会尽快处理这个更新，但请注意这是一个非阻塞操作，文件可能尚未被完全处理。"
+        _run_async_in_thread(RAG_TRACKER.declareUpdateDoc(file_path))
+        return f"已声明文件更新，路径: {file_path}。\nRAG系统会尽快处理这个更新，但请注意这是一个非阻塞操作，文件可能尚未被完全处理。"
     except Exception as e:
         return f"声明文件更新失败: {str(e)}"
 

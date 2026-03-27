@@ -1,0 +1,30 @@
+# Use this workspace to collaborate
+workspace:
+  id: ac85b1ab-b65c-4d9a-8bf3-030650db2b6e
+
+localResources:
+  specs:
+    - ..\backend\tts-hub\GPT-SoVITS-Bundle\runtime\Lib\site-packages\onnx\onnx-data.in.proto
+    - ..\backend\tts-hub\GPT-SoVITS-Bundle\runtime\Lib\site-packages\onnx\onnx-data.proto
+    - ..\backend\tts-hub\GPT-SoVITS-Bundle\runtime\Lib\site-packages\onnx\onnx-ml.proto
+    - ..\backend\tts-hub\GPT-SoVITS-Bundle\runtime\Lib\site-packages\onnx\onnx-operators-ml.proto
+    - ..\backend\tts-hub\GPT-SoVITS-Bundle\runtime\Lib\site-packages\onnx\onnx-operators.in.proto
+    - ..\backend\tts-hub\GPT-SoVITS-Bundle\runtime\Lib\site-packages\onnx\onnx-operators.proto
+    - ..\backend\tts-hub\GPT-SoVITS-Bundle\runtime\Lib\site-packages\onnx\onnx.in.proto
+    - ..\backend\tts-hub\GPT-SoVITS-Bundle\runtime\Lib\site-packages\onnx\onnx.proto
+    - ..\backend\tts-hub\GPT-SoVITS-Bundle\runtime\Lib\site-packages\tensorboardX\proto\api.proto
+    - ..\backend\tts-hub\GPT-SoVITS-Bundle\runtime\Lib\site-packages\tensorboardX\proto\attr_value.proto
+    - ..\backend\tts-hub\GPT-SoVITS-Bundle\runtime\Lib\site-packages\tensorboardX\proto\event.proto
+    - ..\backend\tts-hub\GPT-SoVITS-Bundle\runtime\Lib\site-packages\tensorboardX\proto\graph.proto
+    - ..\backend\tts-hub\GPT-SoVITS-Bundle\runtime\Lib\site-packages\tensorboardX\proto\layout.proto
+    - ..\backend\tts-hub\GPT-SoVITS-Bundle\runtime\Lib\site-packages\tensorboardX\proto\node_def.proto
+    - ..\backend\tts-hub\GPT-SoVITS-Bundle\runtime\Lib\site-packages\tensorboardX\proto\plugin_hparams.proto
+    - ..\backend\tts-hub\GPT-SoVITS-Bundle\runtime\Lib\site-packages\tensorboardX\proto\plugin_mesh.proto
+    - ..\backend\tts-hub\GPT-SoVITS-Bundle\runtime\Lib\site-packages\tensorboardX\proto\plugin_pr_curve.proto
+    - ..\backend\tts-hub\GPT-SoVITS-Bundle\runtime\Lib\site-packages\tensorboardX\proto\plugin_text.proto
+    - ..\backend\tts-hub\GPT-SoVITS-Bundle\runtime\Lib\site-packages\tensorboardX\proto\resource_handle.proto
+    - ..\backend\tts-hub\GPT-SoVITS-Bundle\runtime\Lib\site-packages\tensorboardX\proto\summary.proto
+    - ..\backend\tts-hub\GPT-SoVITS-Bundle\runtime\Lib\site-packages\tensorboardX\proto\tensor.proto
+    - ..\backend\tts-hub\GPT-SoVITS-Bundle\runtime\Lib\site-packages\tensorboardX\proto\tensor_shape.proto
+    - ..\backend\tts-hub\GPT-SoVITS-Bundle\runtime\Lib\site-packages\tensorboardX\proto\types.proto
+    - ..\backend\tts-hub\GPT-SoVITS-Bundle\runtime\Lib\site-packages\tensorboardX\proto\versions.proto

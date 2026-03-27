@@ -4,7 +4,8 @@ import os
 import re
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+from datetime import datetime
 
 try:
     import faust_backend.config_loader as conf
@@ -290,3 +291,54 @@ async def switch_agent(agent_name: str) -> Dict[str, Any]:
     _write_json(PUBLIC_CONFIG_PATH, public_cfg)
     rag_info = await align_rag_agent(agent_name)
     return {"agent_name": agent_name, "rag": rag_info}
+
+
+async def get_agent_diary(agent_name: str) -> List[Dict[str, Any]]:
+    agent_dir = _agent_dir(agent_name)
+    diary_dir = agent_dir / "diary"
+    if not diary_dir.exists():
+        return []
+    entries = []
+    for file in sorted(diary_dir.glob("*.json"), key=lambda p: p.name, reverse=True):
+        try:
+            data = json.loads(file.read_text(encoding="utf-8"))
+            entries.append({
+                "timestamp": data.get("timestamp"),
+                "content": data.get("content"),
+                "path": str(file),
+            })
+        except Exception:
+            continue
+    return entries
+
+
+async def get_agent_records(agent_name: str, date_limit: Optional[datetime] = None) -> List[Dict[str, Any]]:
+    agent_dir = _agent_dir(agent_name)
+    record_dir = agent_dir / "record"
+    if not record_dir.exists():
+        return []
+    if date_limit:
+        # 转换为 YYYYMMDD 格式的整数，方便比较
+        date_limit = int(datetime.now().strftime("%Y%m%d"))
+        with open(record_dir/(date_limit+".md"),"r",encoding="utf-8") as f:
+            return [{
+                "date": date_limit,
+                "content": f.read(),
+                "path": str(record_dir/(date_limit+".md")),
+            }]
+    else:
+        records = []
+        for file in sorted(record_dir.glob("*.md"), key=lambda p: p.name, reverse=True):
+            try:
+                date_str = file.stem
+                date_int = int(date_str)
+                with open(file, "r", encoding="utf-8") as f:
+                    content = f.read()
+                records.append({
+                    "date": date_int,
+                    "content": content,
+                    "path": str(file),
+                })
+            except Exception:
+                continue
+        return records

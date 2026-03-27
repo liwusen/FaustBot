@@ -78,15 +78,15 @@ def print_globals():
             print(f"{k}: {v}")
 argparser = argparse.ArgumentParser(description="FAUST Backend Main Service\n命令行参数可以覆盖配置文件中的设置，优先级高于配置文件。\nThis agent has super cow powers")
 argparser.add_argument("--agent",type=str,default="NONE",action="store",help="Agent name to use (default: faust)")
-argparser.add_argument("--run-other-backend-services",action="store_true",help="Whether to run other backend services as subprocess like ASR/TTS (default: False)")
+argparser.add_argument("--no-run-other-backend-services",action="store_true",help="Whether to run other backend services as subprocess like ASR/TTS (default: False)")
 argparser.add_argument("--save-in-memory",action="store_true",help="Memory Checkpointer and Store for debugging (default: False)")
 argparser.add_argument("--MOO",action="store_true",help="apt-get:???\n这里没有任何彩蛋!!!")
 args = argparser.parse_args()
 if args.agent != "NONE":
     AGENT_NAME = args.agent
     print(f"[config_loader] Agent name overridden by command line argument: {AGENT_NAME}")
-if args.run_other_backend_services:
-    print(f"[config_loader] Running other backend services as subprocess.")
+if args.no_run_other_backend_services:
+    print(f"[config_loader] Won't running other backend services as subprocess.")
 if args.MOO:
     LIST=[]
     LIST.append("""

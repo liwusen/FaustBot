@@ -1,4 +1,5 @@
 @echo off
+title FAUST Backend TTS Service
 echo FAUST Backend TTS Service Starting...
 cd tts-hub\GPT-SoVITS-Bundle
 set "PATH=%~dp0tts-hub\GPT-SoVITS-Bundle\runtime;%PATH%"
