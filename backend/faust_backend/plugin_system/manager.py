@@ -110,6 +110,21 @@ class PluginManager:
             return module.Plugin()
         raise PluginLoadError("Plugin module must expose get_plugin() or Plugin class")
 
+    def _call_plugin_startup(self, plugin: Any, ctx: PluginContext) -> None:
+        startup_fn = None
+        if hasattr(plugin, "startup"):
+            startup_fn = getattr(plugin, "startup")
+        elif hasattr(plugin, "Startup"):
+            startup_fn = getattr(plugin, "Startup")
+
+        if not callable(startup_fn):
+            return
+
+        try:
+            startup_fn(ctx)
+        except TypeError:
+            startup_fn()
+
     def _normalize_tool_specs(self, plugin_id: str, tools: list[Any] | None) -> list[ToolSpec]:
         out: list[ToolSpec] = []
         for item in tools or []:
@@ -209,6 +224,8 @@ class PluginManager:
 
                 if hasattr(plugin, "on_load"):
                     plugin.on_load(ctx)
+
+                self._call_plugin_startup(plugin, ctx)
 
                 tools = self._normalize_tool_specs(manifest.plugin_id, plugin.register_tools(ctx) if hasattr(plugin, "register_tools") else [])
                 middlewares = self._normalize_middleware_specs(plugin.register_middlewares(ctx) if hasattr(plugin, "register_middlewares") else [])

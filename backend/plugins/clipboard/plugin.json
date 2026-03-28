@@ -1,0 +1,11 @@
+{
+  "id": "clipboard",
+  "name": "Clipboard Plugin",
+  "version": "1.0.0",
+  "enabled": false,
+  "entry": "main.py",
+  "permissions": [
+    "tool:clipboard"
+  ],
+  "priority": 325
+}

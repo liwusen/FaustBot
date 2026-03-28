@@ -73,6 +73,9 @@ class PluginManifest:
 class PluginProtocol(Protocol):
     manifest: PluginManifest
 
+    def startup(self, ctx: PluginContext) -> None:
+        ...
+
     def on_load(self, ctx: PluginContext) -> None:
         ...
 

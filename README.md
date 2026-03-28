@@ -36,6 +36,8 @@
 
 - [x] 高速响应 平均时间<1s
 
+- [x] 插件系统
+
 - [ ] 操作网页 (Agent Browser)
 
 - [ ] 给予AI单独的一个可交互Console
@@ -111,7 +113,7 @@ flowchart TD
         D4[Nimble 交互工具<br/>创建窗口/等待回调]
         D5[Trigger 工具<br/>append_trigger]
         D6[HIL 人审请求]
-        
+
         D2 --> D2A[异步RAG查询]
         D2A --> D2B[返回上下文或注册触发器]
     end

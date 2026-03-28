@@ -2,17 +2,23 @@
   "plugins": {
     "example_echo": {
       "enabled": true
+    },
+    "clipboard": {
+      "enabled": true
     }
   },
   "tools": {
     "example_echo:plugin_echo_tool": {
       "enabled": true
-    }
+    },
+    "clipboard:getClipboardContent": {},
+    "clipboard:setClipboardContent": {}
   },
   "middlewares": {
     "example_echo:EchoTraceMiddleware": {}
   },
   "trigger_controls": {
-    "example_echo": {}
+    "example_echo": {},
+    "clipboard": {}
   }
 }
