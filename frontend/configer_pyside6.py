@@ -105,7 +105,7 @@ class RagDetailDialog(QDialog):
 class ConfigerWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Faust Configer (PySide6)")
+        self.setWindowTitle("FaustBot Configer")
         self.resize(1300, 900)
 
         self.state: Dict[str, Any] = {
@@ -137,6 +137,7 @@ class ConfigerWindow(QMainWindow):
         self.private_fields: Dict[str, FieldWidget] = {}
         self.live2d_fields: Dict[str, FieldWidget] = {}
         self.agent_file_edits: Dict[str, QPlainTextEdit] = {}
+        self.plugin_config_fields: Dict[str, FieldWidget] = {}
 
         self._build_ui()
         self.refresh_all()
@@ -370,42 +371,22 @@ class ConfigerWindow(QMainWindow):
         self.plugin_meta_view = QPlainTextEdit()
         self.plugin_meta_view.setReadOnly(True)
         right.addWidget(QLabel("插件详情"))
-        right.addWidget(self.plugin_meta_view, 2)
+        right.addWidget(self.plugin_meta_view, 1)
 
-        self.plugin_tools_list = QListWidget()
-        tool_btn = QHBoxLayout()
-        self.plugin_tool_enable_btn = QPushButton("启用 Tool")
-        self.plugin_tool_disable_btn = QPushButton("禁用 Tool")
-        tool_btn.addWidget(self.plugin_tool_enable_btn)
-        tool_btn.addWidget(self.plugin_tool_disable_btn)
-        right.addWidget(QLabel("Tools"))
-        right.addWidget(self.plugin_tools_list, 1)
-        right.addLayout(tool_btn)
+        self.plugin_capabilities_view = QPlainTextEdit()
+        self.plugin_capabilities_view.setReadOnly(True)
+        right.addWidget(QLabel("插件能力"))
+        right.addWidget(self.plugin_capabilities_view, 1)
 
-        self.plugin_tool_enable_btn.clicked.connect(lambda: self.set_plugin_tool_enabled(True))
-        self.plugin_tool_disable_btn.clicked.connect(lambda: self.set_plugin_tool_enabled(False))
+        right.addWidget(QLabel("插件配置"))
+        self.plugin_config_form = QFormLayout()
+        cfg_holder = QWidget()
+        cfg_holder.setLayout(self.plugin_config_form)
+        right.addWidget(cfg_holder, 1)
 
-        self.plugin_middlewares_list = QListWidget()
-        mw_btn = QHBoxLayout()
-        self.plugin_mw_enable_btn = QPushButton("启用 Middleware")
-        self.plugin_mw_disable_btn = QPushButton("禁用 Middleware")
-        mw_btn.addWidget(self.plugin_mw_enable_btn)
-        mw_btn.addWidget(self.plugin_mw_disable_btn)
-        right.addWidget(QLabel("Middlewares"))
-        right.addWidget(self.plugin_middlewares_list, 1)
-        right.addLayout(mw_btn)
-
-        self.plugin_mw_enable_btn.clicked.connect(lambda: self.set_plugin_middleware_enabled(True))
-        self.plugin_mw_disable_btn.clicked.connect(lambda: self.set_plugin_middleware_enabled(False))
-
-        trig_btn = QHBoxLayout()
-        self.plugin_trigger_enable_btn = QPushButton("启用 Trigger 控制")
-        self.plugin_trigger_disable_btn = QPushButton("禁用 Trigger 控制")
-        trig_btn.addWidget(self.plugin_trigger_enable_btn)
-        trig_btn.addWidget(self.plugin_trigger_disable_btn)
-        right.addLayout(trig_btn)
-        self.plugin_trigger_enable_btn.clicked.connect(lambda: self.set_plugin_trigger_control_enabled(True))
-        self.plugin_trigger_disable_btn.clicked.connect(lambda: self.set_plugin_trigger_control_enabled(False))
+        self.plugin_config_save_btn = QPushButton("保存配置并重载")
+        self.plugin_config_save_btn.clicked.connect(self.save_plugin_config)
+        right.addWidget(self.plugin_config_save_btn)
 
         split = QSplitter(Qt.Horizontal)
         left_holder = QWidget()
@@ -541,7 +522,44 @@ class ConfigerWindow(QMainWindow):
             return int(text) if text != "" else 0
         if field.value_type == "float":
             return float(text) if text != "" else 0.0
+        if field.value_type == "json":
+            raw = text.strip()
+            if raw == "":
+                return None
+            return json.loads(raw)
         return text
+
+    def _plugin_widget_from_schema(self, item: Dict[str, Any], value: Any) -> FieldWidget:
+        key = str(item.get("key") or "")
+        t = str(item.get("type") or "str").lower()
+        if t in {"string", "text"}:
+            t = "str"
+
+        if t == "bool":
+            w = QComboBox()
+            w.addItems(["true", "false"])
+            w.setCurrentText("true" if bool(value) else "false")
+            return FieldWidget(key=key, widget=w, value_type="bool")
+
+        if t == "json":
+            txt = "" if value is None else json.dumps(value, ensure_ascii=False, indent=2)
+            w = QPlainTextEdit(txt)
+            w.setFixedHeight(100)
+            return FieldWidget(key=key, widget=w, value_type="json")
+
+        if t in {"int", "float"}:
+            w = QLineEdit("" if value is None else str(value))
+            return FieldWidget(key=key, widget=w, value_type=t)
+
+        if t == "str" and isinstance(value, str) and len(value) > 120:
+            w = QPlainTextEdit(value)
+            w.setFixedHeight(100)
+            return FieldWidget(key=key, widget=w, value_type="str")
+
+        w = QLineEdit("" if value is None else str(value))
+        if any(token in key.upper() for token in ["KEY", "TOKEN", "SECRET", "PASSWORD"]):
+            w.setEchoMode(QLineEdit.Password)
+        return FieldWidget(key=key, widget=w, value_type="str")
 
     # ---------- Load / Render ----------
     def load_config_view(self):
@@ -651,35 +669,78 @@ class ConfigerWindow(QMainWindow):
         plugin = self._selected_plugin_record()
         if not plugin:
             self.plugin_meta_view.setPlainText("")
-            self.plugin_tools_list.clear()
-            self.plugin_middlewares_list.clear()
+            self.plugin_capabilities_view.setPlainText("")
+            self._clear_form_layout(self.plugin_config_form)
+            self.plugin_config_fields.clear()
             return
 
-        meta = dict(plugin)
-        meta.pop("tools", None)
-        meta.pop("middlewares", None)
-        self.plugin_meta_view.setPlainText(json.dumps(meta, ensure_ascii=False, indent=2))
+        meta_lines = [
+            f"ID: {plugin.get('id', '-')}",
+            f"名称: {plugin.get('name', '-')}",
+            f"版本: {plugin.get('version', '-')}",
+            f"作者: {plugin.get('author') or '-'}",
+            f"主页: {plugin.get('homepage') or '-'}",
+            f"状态: {'启用' if plugin.get('enabled') else '禁用'}",
+            f"优先级: {plugin.get('priority', '-')}",
+            f"权限: {', '.join(plugin.get('permissions') or []) or '-'}",
+            f"描述: {plugin.get('description') or '-'}",
+        ]
+        self.plugin_meta_view.setPlainText("\n".join(meta_lines))
 
-        self.plugin_tools_list.clear()
+        trigger_control = plugin.get("trigger_control") or {}
+        capability_lines = ["Tools:"]
         for tool in plugin.get("tools") or []:
-            name = str(tool.get("name") or "")
-            enabled = bool(tool.get("enabled"))
-            item = QListWidgetItem(f"[{ 'ON' if enabled else 'OFF' }] {name}")
-            item.setData(Qt.UserRole, name)
-            self.plugin_tools_list.addItem(item)
+            capability_lines.append(f"- {tool.get('name')} ({tool.get('description') or '无描述'})")
+        if len(capability_lines) == 1:
+            capability_lines.append("- 无")
 
-        self.plugin_middlewares_list.clear()
-        for mw in plugin.get("middlewares") or []:
-            name = str(mw.get("name") or "")
-            enabled = bool(mw.get("enabled"))
-            prio = mw.get("priority")
-            item = QListWidgetItem(f"[{ 'ON' if enabled else 'OFF' }] {name} (prio={prio})")
-            item.setData(Qt.UserRole, name)
-            self.plugin_middlewares_list.addItem(item)
+        capability_lines.append("")
+        capability_lines.append("Middlewares:")
+        middlewares = plugin.get("middlewares") or []
+        if not middlewares:
+            capability_lines.append("- 无")
+        for mw in middlewares:
+            capability_lines.append(
+                f"- {mw.get('name')} (prio={mw.get('priority')}, {mw.get('description') or '无描述'})"
+            )
+
+        capability_lines.append("")
+        capability_lines.append("Trigger 控制能力:")
+        capability_lines.append(
+            f"- append_filter={bool(trigger_control.get('supports_append_filter'))}, "
+            f"fire_filter={bool(trigger_control.get('supports_fire_filter'))}"
+        )
+        self.plugin_capabilities_view.setPlainText("\n".join(capability_lines))
+
+        self._clear_form_layout(self.plugin_config_form)
+        self.plugin_config_fields.clear()
+        config = plugin.get("config") or {}
+        schema = config.get("schema") or []
+        values = config.get("values") or {}
+        if not schema:
+            self.plugin_config_form.addRow(QLabel("该插件未注册配置项。"))
+        else:
+            for item in schema:
+                key = str(item.get("key") or "")
+                if not key:
+                    continue
+                value = values.get(key, item.get("default"))
+                field = self._plugin_widget_from_schema(item, value)
+                self.plugin_config_fields[key] = field
+                label = str(item.get("label") or key)
+                desc = str(item.get("description") or "")
+                label_text = f"{label} ({key})" if label != key else key
+                if desc:
+                    label_text += f"\n{desc}"
+                self.plugin_config_form.addRow(QLabel(label_text), field.widget)
 
     def reload_plugins(self):
         try:
-            self.api_request("POST", "/faust/admin/plugins/reload", payload={"apply_runtime": True})
+            self.api_request(
+                "POST",
+                "/faust/admin/plugins/reload",
+                payload={"apply_runtime": True, "no_initial_chat": True},
+            )
             self.load_plugins()
             self.notify("插件已重载并应用到运行时")
         except Exception as e:
@@ -691,7 +752,11 @@ class ConfigerWindow(QMainWindow):
             return
         action = "enable" if enabled else "disable"
         try:
-            self.api_request("POST", f"/faust/admin/plugins/{requests.utils.quote(pid, safe='')}/{action}", payload={"apply_runtime": True})
+            self.api_request(
+                "POST",
+                f"/faust/admin/plugins/{requests.utils.quote(pid, safe='')}/{action}",
+                payload={"apply_runtime": True, "no_initial_chat": True},
+            )
             self.load_plugins()
             self.notify(f"插件 {pid} 已{'启用' if enabled else '禁用'}")
         except Exception as e:
@@ -713,61 +778,31 @@ class ConfigerWindow(QMainWindow):
         except Exception as e:
             self.fail("关闭热重载失败", e)
 
-    def set_plugin_tool_enabled(self, enabled: bool):
-        pid = self._selected_plugin_id()
-        item = self.plugin_tools_list.currentItem()
-        if not pid or not item:
-            return
-        tool_name = item.data(Qt.UserRole)
-        if not tool_name:
-            return
-        action = "enable" if enabled else "disable"
-        try:
-            self.api_request(
-                "POST",
-                f"/faust/admin/plugins/{requests.utils.quote(pid, safe='')}/tools/{requests.utils.quote(str(tool_name), safe='')}/{action}",
-                payload={"apply_runtime": True},
-            )
-            self.load_plugins()
-            self.notify(f"Tool {tool_name} 已{'启用' if enabled else '禁用'}")
-        except Exception as e:
-            self.fail("Tool 开关失败", e)
-
-    def set_plugin_middleware_enabled(self, enabled: bool):
-        pid = self._selected_plugin_id()
-        item = self.plugin_middlewares_list.currentItem()
-        if not pid or not item:
-            return
-        mw_name = item.data(Qt.UserRole)
-        if not mw_name:
-            return
-        action = "enable" if enabled else "disable"
-        try:
-            self.api_request(
-                "POST",
-                f"/faust/admin/plugins/{requests.utils.quote(pid, safe='')}/middlewares/{requests.utils.quote(str(mw_name), safe='')}/{action}",
-                payload={"apply_runtime": True},
-            )
-            self.load_plugins()
-            self.notify(f"Middleware {mw_name} 已{'启用' if enabled else '禁用'}")
-        except Exception as e:
-            self.fail("Middleware 开关失败", e)
-
-    def set_plugin_trigger_control_enabled(self, enabled: bool):
+    def save_plugin_config(self):
         pid = self._selected_plugin_id()
         if not pid:
             return
-        action = "enable" if enabled else "disable"
+        if not self.plugin_config_fields:
+            self.notify("当前插件没有可保存的配置项")
+            return
+        values: Dict[str, Any] = {}
         try:
+            for key, field in self.plugin_config_fields.items():
+                values[key] = self._field_value(field)
             self.api_request(
                 "POST",
-                f"/faust/admin/plugins/{requests.utils.quote(pid, safe='')}/trigger-control/{action}",
-                payload={"apply_runtime": False},
+                f"/faust/admin/plugins/{requests.utils.quote(pid, safe='')}/config",
+                payload={
+                    "values": values,
+                    "apply_runtime": True,
+                    "reset_dialog": False,
+                    "no_initial_chat": True,
+                },
             )
             self.load_plugins()
-            self.notify(f"插件 {pid} Trigger 控制已{'启用' if enabled else '禁用'}")
+            self.notify(f"插件 {pid} 配置已保存并重载")
         except Exception as e:
-            self.fail("Trigger 控制开关失败", e)
+            self.fail("保存插件配置失败", e)
 
     def load_rag_documents(self, reset_page: bool = False):
         rag = self.state["rag"]

@@ -41,6 +41,30 @@ class PluginContext:
             raise RuntimeError("trigger_delete is not available")
         return fn(trigger_id)
 
+    def register_config(self, schema: str | dict[str, Any]) -> Any:
+        fn = self.config.get("plugin_config_register")
+        if not callable(fn):
+            raise RuntimeError("plugin_config_register is not available")
+        return fn(schema)
+
+    def get_config(self, key: str, default: Any = None) -> Any:
+        fn = self.config.get("plugin_config_get")
+        if not callable(fn):
+            raise RuntimeError("plugin_config_get is not available")
+        return fn(key, default)
+
+    def set_config(self, key: str, value: Any) -> Any:
+        fn = self.config.get("plugin_config_set")
+        if not callable(fn):
+            raise RuntimeError("plugin_config_set is not available")
+        return fn(key, value)
+
+    def list_configs(self) -> dict[str, Any]:
+        fn = self.config.get("plugin_config_list")
+        if not callable(fn):
+            raise RuntimeError("plugin_config_list is not available")
+        return fn()
+
 
 @dataclass
 class ToolSpec:
@@ -64,6 +88,9 @@ class PluginManifest:
     plugin_id: str
     name: str
     version: str = "0.1.0"
+    description: str = ""
+    author: str = ""
+    homepage: str = ""
     enabled: bool = True
     entry: str = "main.py"
     permissions: list[str] = field(default_factory=list)

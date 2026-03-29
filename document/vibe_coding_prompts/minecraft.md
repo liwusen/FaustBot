@@ -86,7 +86,7 @@
 > faust\backend\minecraft\__dev__
 > ```
 
-10. mc-operater 放在 faust/backend/minecraft下
+10. mc-operator 放在 faust/backend/minecraft下
     python 放在 faust/backend/backend-main.py && faust/backend/faust_backend
 
 ### 实现过程

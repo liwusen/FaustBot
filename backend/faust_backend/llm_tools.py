@@ -10,8 +10,6 @@ import functools,inspect,os,sys
 import socket
 import io
 import datetime
-from faust_backend.searchapi_patched import SearchApiAPIWrapper
-from langchain_community.utilities import WikipediaAPIWrapper
 import faust_backend.gui_llm_lib as gui_llm_lib
 import faust_backend.trigger_manager as trigger_manager
 import faust_backend.nimble as nimble
@@ -366,37 +364,6 @@ def writeTextFileTool(file_path: str, content: str) -> str:
         return "文件写入成功。"
     except Exception as e:
         return f"写入文件出错: {str(e)}"
-
-swrapper=SearchApiAPIWrapper()
-@add_to_tool_list
-@tool
-@record_func_name
-def webSearchTool(query: str) -> str:
-    """
-    Description:
-        使用SearchApi进行网络搜索，并返回搜索结果的摘要。
-    Args:
-        query (str): 需要搜索的查询字符串。
-    Returns:
-        str: 搜索结果的摘要。
-    """
-    print("[llm_tools.webSearchTool] Searching web for query:", query)
-    return swrapper.run(query=query)
-wwrapper=WikipediaAPIWrapper()
-@add_to_tool_list
-@tool
-@record_func_name
-def wikiSearchTool(query: str) -> str:
-    """
-    Description:
-        使用Wikipedia进行搜索，并返回搜索结果的摘要。
-    Args:
-        query (str): 需要搜索的查询字符串。
-    Returns:
-        str: 搜索结果的摘要。
-    """
-    print("[llm_tools.wikiSearchTool] Searching Wikipedia for query:", query)
-    return wwrapper.run(query=query)
 
 @add_to_tool_list
 @tool

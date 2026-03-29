@@ -1,0 +1,15 @@
+{
+  "id": "search_tools",
+  "name": "Search Tools Plugin",
+  "version": "1.0.0",
+  "description": "Provide SearchAPI and Wikipedia search tools",
+  "author": "faust",
+  "homepage": "",
+  "enabled": true,
+  "entry": "main.py",
+  "permissions": [
+    "tool:web-search",
+    "tool:wiki-search"
+  ],
+  "priority": 200
+}

@@ -1,0 +1,14 @@
+{
+  "id": "context_manager",
+  "name": "自动上下文管理器",
+  "version": "1.0.0",
+  "description": "在保留系统指令的同时，修剪过时的用户上下文",
+  "author": "allenlee",
+  "homepage": "",
+  "enabled": false,
+  "entry": "main.py",
+  "permissions": [
+    "middleware:context-prune"
+  ],
+  "priority": 260
+}

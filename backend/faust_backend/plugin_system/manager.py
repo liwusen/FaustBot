@@ -23,7 +23,7 @@ class PluginManager:
         self.plugins_dir.mkdir(parents=True, exist_ok=True)
         self.state_file = Path(state_file) if state_file else self.plugins_dir / "plugins.state.json"
 
-        self._state: dict[str, Any] = {"plugins": {}, "tools": {}, "middlewares": {}, "trigger_controls": {}}
+        self._state: dict[str, Any] = {"plugins": {}, "configs": {}}
         self._plugins: dict[str, dict[str, Any]] = {}
         self._hot_reload_enabled = False
         self._hot_reload_interval_sec = 2.0
@@ -36,9 +36,13 @@ class PluginManager:
             self._save_state()
             return
         try:
-            self._state = json.loads(self.state_file.read_text(encoding="utf-8"))
+            raw = json.loads(self.state_file.read_text(encoding="utf-8"))
+            self._state = {
+                "plugins": dict(raw.get("plugins") or {}),
+                "configs": dict(raw.get("configs") or {}),
+            }
         except Exception:
-            self._state = {"plugins": {}, "tools": {}, "middlewares": {}, "trigger_controls": {}}
+            self._state = {"plugins": {}, "configs": {}}
 
     def _save_state(self) -> None:
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
@@ -73,6 +77,9 @@ class PluginManager:
             plugin_id=plugin_id,
             name=str(raw.get("name") or plugin_id),
             version=str(raw.get("version") or "0.1.0"),
+            description=str(raw.get("description") or ""),
+            author=str(raw.get("author") or ""),
+            homepage=str(raw.get("homepage") or ""),
             enabled=bool(raw.get("enabled", True)),
             entry=str(raw.get("entry") or "main.py"),
             permissions=list(raw.get("permissions") or []),
@@ -89,8 +96,164 @@ class PluginManager:
                 "trigger_get": trigger_manager.get_trigger,
                 "trigger_update": trigger_manager.update_trigger,
                 "trigger_delete": trigger_manager.delete_trigger,
+                "plugin_config_register": lambda schema: self._register_plugin_config_schema(plugin_id, schema),
+                "plugin_config_get": lambda key, default=None: self._plugin_config_get(plugin_id, key, default),
+                "plugin_config_set": lambda key, value: self._plugin_config_set(plugin_id, key, value),
+                "plugin_config_list": lambda: self._plugin_config_list(plugin_id),
             },
         )
+
+    def _ensure_plugin_config_state(self, plugin_id: str) -> dict[str, Any]:
+        return self._state.setdefault("configs", {}).setdefault(plugin_id, {"schema": [], "values": {}})
+
+    def _normalize_config_schema(self, schema: str | dict[str, Any] | list[Any]) -> list[dict[str, Any]]:
+        items: list[Any]
+        if isinstance(schema, str):
+            items = []
+            for raw_line in schema.splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = [p.strip() for p in line.split(":", 2)]
+                if len(parts) < 3:
+                    continue
+                key, typ = parts[0], parts[1]
+                label_part = parts[2].strip()
+                default_value: Any = None
+                label = label_part
+                # 支持 KEY:type:label=default 语法
+                if "=" in label_part:
+                    label, default_raw = label_part.rsplit("=", 1)
+                    label = label.strip() or key
+                    default_raw = default_raw.strip()
+                    default_value = None if default_raw == "" else default_raw
+                items.append({"key": key, "type": typ, "label": label, "default": default_value})
+        elif isinstance(schema, dict):
+            items = list(schema.get("fields") or schema.get("items") or [])
+        elif isinstance(schema, list):
+            items = list(schema)
+        else:
+            return []
+
+        out: list[dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("key") or "").strip()
+            if not key:
+                continue
+            typ = str(item.get("type") or "str").strip().lower()
+            if typ not in {"str", "string", "int", "float", "bool", "json", "text"}:
+                typ = "str"
+            default_value = item.get("default")
+            if default_value is not None:
+                try:
+                    default_value = self._coerce_config_value(typ, default_value)
+                except Exception:
+                    # default 非法时忽略，避免影响插件加载
+                    default_value = None
+            out.append(
+                {
+                    "key": key,
+                    "type": typ,
+                    "label": str(item.get("label") or key),
+                    "description": str(item.get("description") or ""),
+                    "default": default_value,
+                }
+            )
+        return out
+
+    def _coerce_config_value(self, typ: str, value: Any) -> Any:
+        t = (typ or "str").lower()
+        if t in {"str", "string", "text"}:
+            return "" if value is None else str(value)
+        if t == "int":
+            return int(value)
+        if t == "float":
+            return float(value)
+        if t == "bool":
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)):
+                return bool(value)
+            return str(value).strip().lower() in {"1", "true", "yes", "on", "y"}
+        if t == "json":
+            if isinstance(value, (dict, list)):
+                return value
+            if value is None or str(value).strip() == "":
+                return None
+            return json.loads(str(value))
+        return value
+
+    def _register_plugin_config_schema(self, plugin_id: str, schema: str | dict[str, Any] | list[Any]) -> dict[str, Any]:
+        normalized = self._normalize_config_schema(schema)
+        state = self._ensure_plugin_config_state(plugin_id)
+        state["schema"] = normalized
+        values = state.setdefault("values", {})
+        for item in normalized:
+            key = item["key"]
+            if key not in values and item.get("default") is not None:
+                try:
+                    values[key] = self._coerce_config_value(str(item.get("type") or "str"), item.get("default"))
+                except Exception:
+                    values[key] = item.get("default")
+        self._save_state()
+        return {"schema": normalized, "values": dict(values)}
+
+    def _plugin_config_get(self, plugin_id: str, key: str, default: Any = None) -> Any:
+        state = self._ensure_plugin_config_state(plugin_id)
+        values = state.setdefault("values", {})
+        if key in values:
+            return values.get(key)
+        for item in state.get("schema") or []:
+            if str(item.get("key")) == key and item.get("default") is not None:
+                return item.get("default")
+        return default
+
+    def _plugin_config_set(self, plugin_id: str, key: str, value: Any) -> Any:
+        state = self._ensure_plugin_config_state(plugin_id)
+        schema = state.get("schema") or []
+        value_type = "str"
+        for item in schema:
+            if str(item.get("key")) == key:
+                value_type = str(item.get("type") or "str")
+                break
+        coerced = self._coerce_config_value(value_type, value)
+        state.setdefault("values", {})[key] = coerced
+        self._save_state()
+        return coerced
+
+    def _plugin_config_list(self, plugin_id: str) -> dict[str, Any]:
+        state = self._ensure_plugin_config_state(plugin_id)
+        return dict(state.get("values") or {})
+
+    def get_plugin_config_snapshot(self, plugin_id: str) -> dict[str, Any]:
+        state = self._ensure_plugin_config_state(plugin_id)
+        schema = list(state.get("schema") or [])
+        raw_values = dict(state.get("values") or {})
+        schema_keys = [str(item.get("key") or "") for item in schema if str(item.get("key") or "")]
+        values: dict[str, Any] = {k: raw_values.get(k) for k in schema_keys if k in raw_values}
+        for item in schema:
+            key = str(item.get("key") or "")
+            if key and key not in values and item.get("default") is not None:
+                try:
+                    values[key] = self._coerce_config_value(str(item.get("type") or "str"), item.get("default"))
+                except Exception:
+                    values[key] = item.get("default")
+        return {"plugin_id": plugin_id, "schema": schema, "values": values}
+
+    def set_plugin_config_values(self, plugin_id: str, values: dict[str, Any]) -> dict[str, Any]:
+        state = self._ensure_plugin_config_state(plugin_id)
+        schema = {str(item.get("key")): item for item in (state.get("schema") or [])}
+        target = state.setdefault("values", {})
+        for key, raw_value in (values or {}).items():
+            field = schema.get(str(key))
+            if field is None:
+                continue
+            value_type = str(field.get("type") if field else "str")
+            target[str(key)] = self._coerce_config_value(value_type, raw_value)
+        self._save_state()
+        return self.get_plugin_config_snapshot(plugin_id)
 
     def _load_module(self, plugin_id: str, entry_file: Path) -> ModuleType:
         if not entry_file.exists():
@@ -174,20 +337,6 @@ class PluginManager:
     def _plugin_enabled(self, plugin_id: str, default: bool) -> bool:
         p_state = self._state.setdefault("plugins", {}).setdefault(plugin_id, {})
         return bool(p_state.get("enabled", default))
-
-    def _tool_enabled(self, plugin_id: str, tool_name: str, default: bool) -> bool:
-        key = f"{plugin_id}:{tool_name}"
-        t_state = self._state.setdefault("tools", {}).setdefault(key, {})
-        return bool(t_state.get("enabled", default))
-
-    def _middleware_enabled(self, plugin_id: str, middleware_name: str, default: bool) -> bool:
-        key = f"{plugin_id}:{middleware_name}"
-        m_state = self._state.setdefault("middlewares", {}).setdefault(key, {})
-        return bool(m_state.get("enabled", default))
-
-    def _trigger_control_enabled(self, plugin_id: str, default: bool = True) -> bool:
-        t_state = self._state.setdefault("trigger_controls", {}).setdefault(plugin_id, {})
-        return bool(t_state.get("enabled", default))
 
     def reload(self) -> dict[str, Any]:
         # unload old plugins
@@ -282,20 +431,6 @@ class PluginManager:
         self._state.setdefault("plugins", {}).setdefault(plugin_id, {})["enabled"] = bool(enabled)
         self._save_state()
 
-    def set_tool_enabled(self, plugin_id: str, tool_name: str, enabled: bool) -> None:
-        key = f"{plugin_id}:{tool_name}"
-        self._state.setdefault("tools", {}).setdefault(key, {})["enabled"] = bool(enabled)
-        self._save_state()
-
-    def set_middleware_enabled(self, plugin_id: str, middleware_name: str, enabled: bool) -> None:
-        key = f"{plugin_id}:{middleware_name}"
-        self._state.setdefault("middlewares", {}).setdefault(key, {})["enabled"] = bool(enabled)
-        self._save_state()
-
-    def set_trigger_control_enabled(self, plugin_id: str, enabled: bool) -> None:
-        self._state.setdefault("trigger_controls", {}).setdefault(plugin_id, {})["enabled"] = bool(enabled)
-        self._save_state()
-
     def filter_trigger_on_append(self, trigger_payload: dict | None) -> dict | None:
         if not isinstance(trigger_payload, dict):
             return None
@@ -303,8 +438,6 @@ class PluginManager:
         for plugin_id, record in self._plugins.items():
             manifest: PluginManifest = record["manifest"]
             if not self._plugin_enabled(plugin_id, manifest.enabled):
-                continue
-            if not self._trigger_control_enabled(plugin_id, True):
                 continue
             plugin = record.get("plugin")
             if plugin is None or not hasattr(plugin, "filter_trigger_append"):
@@ -326,8 +459,6 @@ class PluginManager:
         for plugin_id, record in self._plugins.items():
             manifest: PluginManifest = record["manifest"]
             if not self._plugin_enabled(plugin_id, manifest.enabled):
-                continue
-            if not self._trigger_control_enabled(plugin_id, True):
                 continue
             plugin = record.get("plugin")
             if plugin is None or not hasattr(plugin, "filter_trigger_fire"):
@@ -355,8 +486,6 @@ class PluginManager:
                 continue
 
             for spec in record["tools"]:
-                if not self._tool_enabled(plugin_id, spec.name, spec.enabled_by_default):
-                    continue
                 tool_name = str(getattr(spec.tool, "name", None) or getattr(spec.tool, "__name__", spec.name))
                 if tool_name in existing_names:
                     # 命名冲突：跳过插件工具，避免覆盖内置
@@ -374,8 +503,6 @@ class PluginManager:
                 continue
 
             for spec in record["middlewares"]:
-                if not self._middleware_enabled(plugin_id, spec.name, spec.enabled_by_default):
-                    continue
                 priority = int(spec.priority if spec.priority is not None else manifest.priority)
                 candidates.append((priority, f"{plugin_id}:{spec.name}", spec.middleware))
 
@@ -395,7 +522,7 @@ class PluginManager:
                 tool_items.append(
                     {
                         "name": t.name,
-                        "enabled": self._tool_enabled(plugin_id, t.name, t.enabled_by_default),
+                        "enabled": True,
                         "description": t.description,
                     }
                 )
@@ -406,7 +533,7 @@ class PluginManager:
                     {
                         "name": m.name,
                         "priority": m.priority,
-                        "enabled": self._middleware_enabled(plugin_id, m.name, m.enabled_by_default),
+                        "enabled": True,
                         "description": m.description,
                     }
                 )
@@ -423,16 +550,20 @@ class PluginManager:
                     "id": plugin_id,
                     "name": manifest.name,
                     "version": manifest.version,
+                    "description": manifest.description,
+                    "author": manifest.author,
+                    "homepage": manifest.homepage,
                     "enabled": self._plugin_enabled(plugin_id, manifest.enabled),
                     "permissions": list(manifest.permissions),
                     "priority": manifest.priority,
                     "tools": tool_items,
                     "middlewares": middleware_items,
                     "trigger_control": {
-                        "enabled": self._trigger_control_enabled(plugin_id, True),
+                        "enabled": True,
                         "supports_append_filter": bool(hasattr(plugin, "filter_trigger_append")),
                         "supports_fire_filter": bool(hasattr(plugin, "filter_trigger_fire")),
                     },
+                    "config": self.get_plugin_config_snapshot(plugin_id),
                     "health": health,
                 }
             )

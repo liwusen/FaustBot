@@ -5,20 +5,97 @@
     },
     "clipboard": {
       "enabled": true
-    }
-  },
-  "tools": {
-    "example_echo:plugin_echo_tool": {
+    },
+    "search_tools": {
       "enabled": true
     },
-    "clipboard:getClipboardContent": {},
-    "clipboard:setClipboardContent": {}
+    "context_manager": {
+      "enabled": true
+    }
   },
-  "middlewares": {
-    "example_echo:EchoTraceMiddleware": {}
-  },
-  "trigger_controls": {
-    "example_echo": {},
-    "clipboard": {}
+  "configs": {
+    "clipboard": {
+      "schema": [
+        {
+          "key": "ENABLE_CLIPBOARD_READ",
+          "type": "bool",
+          "label": "启用剪贴板读取",
+          "description": "",
+          "default": true
+        },
+        {
+          "key": "ENABLE_CLIPBOARD_WRITE",
+          "type": "bool",
+          "label": "启用剪贴板写入",
+          "description": "",
+          "default": true
+        }
+      ],
+      "values": {
+        "Enable": true,
+        "ENABLE_CLIPBOARD_READ": true,
+        "ENABLE_CLIPBOARD_WRITE": true
+      }
+    },
+    "search_tools": {
+      "schema": [
+        {
+          "key": "SEARCH_ENGINE",
+          "type": "str",
+          "label": "SearchAPI引擎",
+          "description": "",
+          "default": "google"
+        },
+        {
+          "key": "SEARCHAPI_API_KEY",
+          "type": "str",
+          "label": "SearchAPI Key(使用__MAIN_CONFIG__表示主配置)",
+          "description": "",
+          "default": "__MAIN_CONFIG__"
+        },
+        {
+          "key": "ENABLE_SEARCHAPI",
+          "type": "bool",
+          "label": "启用SearchAPI搜索",
+          "description": "",
+          "default": true
+        },
+        {
+          "key": "ENABLE_WIKIPEDIA",
+          "type": "bool",
+          "label": "启用Wikipedia搜索",
+          "description": "",
+          "default": true
+        }
+      ],
+      "values": {
+        "SEARCH_ENGINE": "google",
+        "ENABLE_SEARCHAPI": true,
+        "ENABLE_WIKIPEDIA": true,
+        "SEARCHAPI_API_KEY": ""
+      }
+    },
+    "context_manager": {
+      "schema": [
+        {
+          "key": "TRIGGER_USER_KEEP",
+          "type": "int",
+          "label": "<Trigger>消息保留条数",
+          "description": "",
+          "default": 3
+        },
+        {
+          "key": "NORMAL_USER_KEEP",
+          "type": "int",
+          "label": "普通用户消息保留条数",
+          "description": "",
+          "default": 50
+        }
+      ],
+      "values": {
+        "TRIGGER_USER_KEEP": 3,
+        "NORMAL_USER_KEEP": 50
+      }
+    }
   }
 }

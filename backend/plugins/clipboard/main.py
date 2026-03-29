@@ -113,18 +113,50 @@ class Plugin:
         pass
 
     def register_tools(self, ctx: PluginContext):
+        @tool
+        def getClipboardContentManaged() -> str:
+            """
+            Description:
+                获取系统剪贴板的文本内容。
+            Args:
+                None
+            Returns:
+                str: 剪贴板文本内容，或者错误信息。
+            """
+            if not bool(ctx.get_config("ENABLE_CLIPBOARD_READ", True)):
+                return "剪贴板读取已在插件配置中禁用。"
+            return getClipboardContent()
+
+        @tool
+        def setClipboardContentManaged(text: str) -> str:
+            """
+            Description:
+                设置系统剪贴板的文本内容。
+            Args:
+                text (str): 要设置到剪贴板的文本内容。
+            Returns:
+                str: 操作结果信息。
+            """
+            if not bool(ctx.get_config("ENABLE_CLIPBOARD_WRITE", True)):
+                return "剪贴板写入已在插件配置中禁用。"
+            return setClipboardContent(text)
+
+        # 覆盖为对外稳定工具名，保持兼容
+        getClipboardContentManaged.name = "getClipboardContent"
+        setClipboardContentManaged.name = "setClipboardContent"
+
         return [
             ToolSpec(
                 name="getClipboardContent",
-                tool=getClipboardContent,
+                tool=getClipboardContentManaged,
                 enabled_by_default=True,
-                description=getClipboardContent.__doc__,
+                description=getClipboardContentManaged.__doc__,
             ),
             ToolSpec(
                 name="setClipboardContent",
-                tool=setClipboardContent,
+                tool=setClipboardContentManaged,
                 enabled_by_default=True,
-                description=setClipboardContent.__doc__,
+                description=setClipboardContentManaged.__doc__,
             )
         ]
 
@@ -132,7 +164,7 @@ class Plugin:
         return []
 
     def health_check(self) -> dict[str, Any]:
-        return {"status": "ok", "plugin": "example_echo"}
+        return {"status": "ok", "plugin": "clipboard"}
 
     def filter_trigger_append(self, trigger_payload: dict) -> dict | None:
         return trigger_payload
@@ -142,6 +174,20 @@ class Plugin:
 
     def Heartbeat(self, ctx):
         pass
+
+    def startup(self, ctx: PluginContext) -> None:
+        ctx.register_config(
+            """
+            ENABLE_CLIPBOARD_READ:bool:启用剪贴板读取=true
+            ENABLE_CLIPBOARD_WRITE:bool:启用剪贴板写入=true
+            """
+        )
+        legacy_enable = ctx.get_config("Enable", None)
+        if legacy_enable is not None:
+            if ctx.get_config("ENABLE_CLIPBOARD_READ", None) is None:
+                ctx.set_config("ENABLE_CLIPBOARD_READ", bool(legacy_enable))
+            if ctx.get_config("ENABLE_CLIPBOARD_WRITE", None) is None:
+                ctx.set_config("ENABLE_CLIPBOARD_WRITE", bool(legacy_enable))
 
 def get_plugin() -> Plugin:
     return Plugin()

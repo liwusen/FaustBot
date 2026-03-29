@@ -152,7 +152,7 @@ async def _plugin_hot_reload_loop():
                 plugin_hot_reload_busy = True
                 try:
                     _sync_plugin_trigger_filters()
-                    await rebuild_runtime(reset_dialog=False)
+                    await rebuild_runtime(reset_dialog=False, no_initial_chat=True)
                 finally:
                     plugin_hot_reload_busy = False
         except asyncio.CancelledError:
@@ -196,8 +196,12 @@ def _create_agent_with_extensions(*, model: str, checkpointer, store):
     return create_agent(**kwargs)
 
 
-async def rebuild_runtime(*, reset_dialog: bool = False):
-    print("[main] Rebuilding runtime with reset_dialog =", reset_dialog)
+def _has_checkpoint_db(agent_root: str) -> bool:
+    return os.path.exists(pjoin(agent_root, "faust_checkpoint.db"))
+
+
+async def rebuild_runtime(*, reset_dialog: bool = False, no_initial_chat: bool = False):
+    print("[main] Rebuilding runtime with reset_dialog =", reset_dialog, "no_initial_chat =", no_initial_chat)
     global agent, checkpointer, conn, storer, conn_for_store, AGENT_NAME, AGENT_ROOT
     conf.reload_configs()
     os.environ["DEEPSEEK_API_KEY"] = conf.DEEPSEEK_API_KEY
@@ -243,6 +247,14 @@ async def rebuild_runtime(*, reset_dialog: bool = False):
     except Exception as e:
         print(f"[main] RAG agent align skipped: {e}")
     print("[main] Agent recreated for rebuild.")
+    checkpoint_exists = (not args.save_in_memory) and _has_checkpoint_db(AGENT_ROOT)
+    if no_initial_chat and checkpoint_exists:
+        print("[main] Runtime rebuild skipped initial chat because checkpoint exists and no_initial_chat=True")
+        return {
+            "agent_name": AGENT_NAME,
+            "agent_root": AGENT_ROOT,
+            "initial_chat_skipped": True,
+        }
     if reset_dialog:
         await invoke_agent_locked(agent,{"messages":[{"role":"system","content":PROMPT}]})
     else:
@@ -251,6 +263,7 @@ async def rebuild_runtime(*, reset_dialog: bool = False):
     return {
         "agent_name": AGENT_NAME,
         "agent_root": AGENT_ROOT,
+        "initial_chat_skipped": False,
     }
 
 @app.on_event("startup")
@@ -316,7 +329,10 @@ async def admin_save_config(payload: dict):
 
 @app.post("/faust/admin/config/reload")
 async def admin_reload_config(payload: dict | None = None):
-    info = await rebuild_runtime(reset_dialog=bool((payload or {}).get("reset_dialog", False)))
+    info = await rebuild_runtime(
+        reset_dialog=bool((payload or {}).get("reset_dialog", False)),
+        no_initial_chat=bool((payload or {}).get("no_initial_chat", True)),
+    )
     return {
         "status": "ok",
         "runtime": info,
@@ -326,6 +342,7 @@ async def admin_reload_config(payload: dict | None = None):
             "scope": "config",
             "agent_name": info.get("agent_name"),
             "reset_dialog": bool((payload or {}).get("reset_dialog", False)),
+            "no_initial_chat": bool((payload or {}).get("no_initial_chat", True)),
         }
     }
 
@@ -365,7 +382,7 @@ async def admin_restart_service(service_key: str):
 
 @app.post("/faust/admin/runtime/reload-agent")
 async def admin_reload_agent():
-    info = await rebuild_runtime(reset_dialog=False)
+    info = await rebuild_runtime(reset_dialog=False, no_initial_chat=True)
     return {
         "status": "ok",
         "runtime": info,
@@ -374,13 +391,14 @@ async def admin_reload_agent():
             "scope": "agent",
             "agent_name": info.get("agent_name"),
             "reset_dialog": False,
+            "no_initial_chat": True,
         }
     }
 
 
 @app.post("/faust/admin/runtime/reload-all")
 async def admin_reload_all():
-    info = await rebuild_runtime(reset_dialog=True)
+    info = await rebuild_runtime(reset_dialog=True, no_initial_chat=False)
     return {
         "status": "ok",
         "runtime": info,
@@ -389,6 +407,7 @@ async def admin_reload_all():
             "scope": "all",
             "agent_name": info.get("agent_name"),
             "reset_dialog": True,
+            "no_initial_chat": False,
         }
     }
 
@@ -428,7 +447,7 @@ async def admin_delete_agent(agent_name: str):
 async def admin_switch_agent(payload: dict):
     agent_name = (payload or {}).get("agent_name")
     result = await admin_runtime.switch_agent(agent_name)
-    info = await rebuild_runtime(reset_dialog=True)
+    info = await rebuild_runtime(reset_dialog=True, no_initial_chat=False)
     return {
         "status": "ok",
         "switch": result,
@@ -438,6 +457,7 @@ async def admin_switch_agent(payload: dict):
             "scope": "agent_switch",
             "agent_name": info.get("agent_name"),
             "reset_dialog": True,
+            "no_initial_chat": False,
         }
     }
 
@@ -462,9 +482,10 @@ async def admin_reload_plugins(payload: dict | None = None):
     _sync_plugin_trigger_filters()
     apply_runtime = bool((payload or {}).get("apply_runtime", True))
     reset_dialog = bool((payload or {}).get("reset_dialog", True))
+    no_initial_chat = bool((payload or {}).get("no_initial_chat", True))
     runtime_info = None
     if apply_runtime:
-        runtime_info = await rebuild_runtime(reset_dialog=reset_dialog)
+        runtime_info = await rebuild_runtime(reset_dialog=reset_dialog, no_initial_chat=no_initial_chat)
     return {
         "status": "ok",
         "reload": summary,
@@ -502,9 +523,10 @@ async def admin_enable_plugin(plugin_id: str, payload: dict | None = None):
     plugin_manager.set_plugin_enabled(plugin_id, True)
     apply_runtime = bool((payload or {}).get("apply_runtime", True))
     reset_dialog = bool((payload or {}).get("reset_dialog", True))
+    no_initial_chat = bool((payload or {}).get("no_initial_chat", True))
     runtime_info = None
     if apply_runtime:
-        runtime_info = await rebuild_runtime(reset_dialog=reset_dialog)
+        runtime_info = await rebuild_runtime(reset_dialog=reset_dialog, no_initial_chat=no_initial_chat)
     return {"status": "ok", "plugin_id": plugin_id, "enabled": True, "runtime": runtime_info}
 
 
@@ -513,100 +535,40 @@ async def admin_disable_plugin(plugin_id: str, payload: dict | None = None):
     plugin_manager.set_plugin_enabled(plugin_id, False)
     apply_runtime = bool((payload or {}).get("apply_runtime", True))
     reset_dialog = bool((payload or {}).get("reset_dialog", True))
+    no_initial_chat = bool((payload or {}).get("no_initial_chat", True))
     runtime_info = None
     if apply_runtime:
-        runtime_info = await rebuild_runtime(reset_dialog=reset_dialog)
+        runtime_info = await rebuild_runtime(reset_dialog=reset_dialog, no_initial_chat=no_initial_chat)
     return {"status": "ok", "plugin_id": plugin_id, "enabled": False, "runtime": runtime_info}
 
 
-@app.post("/faust/admin/plugins/{plugin_id}/trigger-control/enable")
-async def admin_enable_plugin_trigger_control(plugin_id: str, payload: dict | None = None):
-    plugin_manager.set_trigger_control_enabled(plugin_id, True)
+@app.get("/faust/admin/plugins/{plugin_id}/config")
+async def admin_get_plugin_config(plugin_id: str):
+    return {
+        "status": "ok",
+        "plugin_id": plugin_id,
+        "config": plugin_manager.get_plugin_config_snapshot(plugin_id),
+    }
+
+
+@app.post("/faust/admin/plugins/{plugin_id}/config")
+async def admin_set_plugin_config(plugin_id: str, payload: dict | None = None):
+    body = payload or {}
+    values = body.get("values") or {}
+    apply_runtime = bool(body.get("apply_runtime", True))
+    reset_dialog = bool(body.get("reset_dialog", False))
+    no_initial_chat = bool(body.get("no_initial_chat", True))
+    config_snapshot = plugin_manager.set_plugin_config_values(plugin_id, values)
+    reload_summary = plugin_manager.reload()
     _sync_plugin_trigger_filters()
-    apply_runtime = bool((payload or {}).get("apply_runtime", False))
-    reset_dialog = bool((payload or {}).get("reset_dialog", False))
     runtime_info = None
     if apply_runtime:
-        runtime_info = await rebuild_runtime(reset_dialog=reset_dialog)
-    return {"status": "ok", "plugin_id": plugin_id, "trigger_control": True, "runtime": runtime_info}
-
-
-@app.post("/faust/admin/plugins/{plugin_id}/trigger-control/disable")
-async def admin_disable_plugin_trigger_control(plugin_id: str, payload: dict | None = None):
-    plugin_manager.set_trigger_control_enabled(plugin_id, False)
-    _sync_plugin_trigger_filters()
-    apply_runtime = bool((payload or {}).get("apply_runtime", False))
-    reset_dialog = bool((payload or {}).get("reset_dialog", False))
-    runtime_info = None
-    if apply_runtime:
-        runtime_info = await rebuild_runtime(reset_dialog=reset_dialog)
-    return {"status": "ok", "plugin_id": plugin_id, "trigger_control": False, "runtime": runtime_info}
-
-
-@app.post("/faust/admin/plugins/{plugin_id}/tools/{tool_name}/enable")
-async def admin_enable_plugin_tool(plugin_id: str, tool_name: str, payload: dict | None = None):
-    plugin_manager.set_tool_enabled(plugin_id, tool_name, True)
-    apply_runtime = bool((payload or {}).get("apply_runtime", True))
-    reset_dialog = bool((payload or {}).get("reset_dialog", True))
-    runtime_info = None
-    if apply_runtime:
-        runtime_info = await rebuild_runtime(reset_dialog=reset_dialog)
+        runtime_info = await rebuild_runtime(reset_dialog=reset_dialog, no_initial_chat=no_initial_chat)
     return {
         "status": "ok",
         "plugin_id": plugin_id,
-        "tool_name": tool_name,
-        "enabled": True,
-        "runtime": runtime_info,
-    }
-
-
-@app.post("/faust/admin/plugins/{plugin_id}/tools/{tool_name}/disable")
-async def admin_disable_plugin_tool(plugin_id: str, tool_name: str, payload: dict | None = None):
-    plugin_manager.set_tool_enabled(plugin_id, tool_name, False)
-    apply_runtime = bool((payload or {}).get("apply_runtime", True))
-    reset_dialog = bool((payload or {}).get("reset_dialog", True))
-    runtime_info = None
-    if apply_runtime:
-        runtime_info = await rebuild_runtime(reset_dialog=reset_dialog)
-    return {
-        "status": "ok",
-        "plugin_id": plugin_id,
-        "tool_name": tool_name,
-        "enabled": False,
-        "runtime": runtime_info,
-    }
-
-
-@app.post("/faust/admin/plugins/{plugin_id}/middlewares/{middleware_name}/enable")
-async def admin_enable_plugin_middleware(plugin_id: str, middleware_name: str, payload: dict | None = None):
-    plugin_manager.set_middleware_enabled(plugin_id, middleware_name, True)
-    apply_runtime = bool((payload or {}).get("apply_runtime", True))
-    reset_dialog = bool((payload or {}).get("reset_dialog", True))
-    runtime_info = None
-    if apply_runtime:
-        runtime_info = await rebuild_runtime(reset_dialog=reset_dialog)
-    return {
-        "status": "ok",
-        "plugin_id": plugin_id,
-        "middleware_name": middleware_name,
-        "enabled": True,
-        "runtime": runtime_info,
-    }
-
-
-@app.post("/faust/admin/plugins/{plugin_id}/middlewares/{middleware_name}/disable")
-async def admin_disable_plugin_middleware(plugin_id: str, middleware_name: str, payload: dict | None = None):
-    plugin_manager.set_middleware_enabled(plugin_id, middleware_name, False)
-    apply_runtime = bool((payload or {}).get("apply_runtime", True))
-    reset_dialog = bool((payload or {}).get("reset_dialog", True))
-    runtime_info = None
-    if apply_runtime:
-        runtime_info = await rebuild_runtime(reset_dialog=reset_dialog)
-    return {
-        "status": "ok",
-        "plugin_id": plugin_id,
-        "middleware_name": middleware_name,
-        "enabled": False,
+        "config": config_snapshot,
+        "reload": reload_summary,
         "runtime": runtime_info,
     }
 
@@ -790,17 +752,17 @@ async def command_websocket(websocket: WebSocket):
                 # activate chat
                 task=trigger_manager.get_next_trigger()
                 print("[main] Trigger activated:",task)
-                trigger_text = f"触发器唤醒了你，请根据触发器内容执行相应操作。{str(task)}"
+                trigger_text = f"<Trigger>触发器唤醒了你，请根据触发器内容执行相应操作。{str(task)}"
                 if isinstance(task, dict):
                     ttype = task.get("type")
                     callback_id = task.get("callback_id")
                     if ttype == "event" and task.get("event_name") == "nimble_result" and callback_id:
                         result = nimble.get_nimble_result(callback_id, cleanup=False)
-                        trigger_text = f"灵动交互窗口收到用户提交。callback_id={callback_id}，用户结果={result}。请继续处理。"
+                        trigger_text = f"<Trigger>灵动交互窗口收到用户提交。callback_id={callback_id}，用户结果={result}。请继续处理。"
                     elif ttype == "event" and task.get("event_name") == "mc_event":
                         payload = task.get("payload") or {}
                         trigger_text = (
-                            "Minecraft事件唤醒了你。"
+                            "<Trigger>Minecraft事件唤醒了你。"
                             f"事件类型={payload.get('mc_event_type')}，"
                             f"事件详情={json.dumps(payload, ensure_ascii=False)}。"
                             "请结合当前游戏状态，决定是否调用 Minecraft 工具继续操作。"
@@ -809,7 +771,7 @@ async def command_websocket(websocket: WebSocket):
                         session = nimble.get_nimble_session(callback_id)
                         if not session:
                             continue
-                        trigger_text = f"灵动交互窗口仍在等待用户操作。callback_id={callback_id}，标题={session.get('title')}，提醒说明={task.get('recall_description') or session.get('recall_text')}。请判断是否需要继续引导用户。"
+                        trigger_text = f"<Trigger>灵动交互窗口仍在等待用户操作。callback_id={callback_id}，标题={session.get('title')}，提醒说明={task.get('recall_description') or session.get('recall_text')}。请判断是否需要继续引导用户。"
                     elif ttype == "nimble-expire" and callback_id:
                         session = nimble.close_nimble_session(callback_id, reason="expired")
                         if session:
@@ -817,10 +779,10 @@ async def command_websocket(websocket: WebSocket):
                             trigger_manager.delete_trigger(session["reminder_trigger_id"])
                             trigger_manager.delete_trigger(session["expire_trigger_id"])
                             backend2frontend.FrontEndCloseNimbleWindow({"callback_id": callback_id, "reason": "expired"})
-                        trigger_text = f"灵动交互窗口已过期关闭。callback_id={callback_id}。如有必要，请重新创建更明确的新窗口。"
+                        trigger_text = f"<Trigger>灵动交互窗口已过期关闭。callback_id={callback_id}。如有必要，请重新创建更明确的新窗口。"
                 resp = await invoke_agent_locked(agent,{"messages":[{"role":"system","content":trigger_text}]})
                 reply = resp["messages"][-1].content
-                print('Trigger activated reply', reply)
+                print('[main] Trigger activated reply', reply)
                 await websocket.send_text(f"SAY {reply}")
             if not forward_queue.empty():
                 command=forward_queue.get()
@@ -829,7 +791,7 @@ async def command_websocket(websocket: WebSocket):
             await asyncio.sleep(0.05)
     except Exception as e:
         print("Websocket error:", e)
-        await websocket.send_text(f"TTS backend error::{e}")
+        await websocket.send_text(f"SAY COMMAND LOOP ERROR::{e}")
 @app.post("/faust/command/forward")
 async def command_forward_post(payload: dict):
     """Forwards a command from frontend to the agent and returns the reply."""
