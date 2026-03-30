@@ -17,21 +17,21 @@ rich
 openai
 pillow
 pyautogui
+easyocr
 
 #RAG依赖
 sentence-transformers
 watchdog
 
-#打包exe
-PyQt5
+#Frontend UI Required
 PySide6
 requests
 pyinstaller
 
-
+# rag nano api Required
 nano-vectordb
 
-#langchain 依赖
+#Langchain
 langchain==1.2.7
 langchain-deepseek==1.0.1
 langchain-community==0.4.1

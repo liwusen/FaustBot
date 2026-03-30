@@ -139,10 +139,10 @@ class ContextPruneMiddleware(AgentMiddleware):
 class Plugin:
     manifest = PluginManifest(
         plugin_id="context_manager",
-        name="Context Manager Plugin",
+        name="自动上下文管理器",
         version="1.0.0",
-        description="Prune stale user messages while preserving system messages",
-        author="faust",
+        description="在保留系统指令的同时，修剪过时的用户上下文",
+        author="allenlee",
         homepage="",
         enabled=False,
         permissions=["middleware:context-prune"],

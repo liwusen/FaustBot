@@ -1,0 +1,18 @@
+{
+  "id": "ui_operator",
+  "name": "UI Operator Plugin",
+  "version": "1.0.0",
+  "description": "Screen OCR and direct UI control tools based on pyautogui and easyocr",
+  "author": "faust",
+  "homepage": "",
+  "enabled": false,
+  "entry": "main.py",
+  "permissions": [
+    "tool:ui-ocr",
+    "tool:ui-click",
+    "tool:ui-right-click",
+    "tool:ui-scroll",
+    "tool:ui-keyboard"
+  ],
+  "priority": 240
+}

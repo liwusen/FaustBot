@@ -477,7 +477,7 @@ def guiOpTool(command: str) -> str:
 @add_to_tool_list
 @tool
 @record_func_name
-def showNimbleWindowTool(html: str, title: str = "灵动交互", recall_text: str = "用户仍在处理这个灵动窗口，请查看用户是否已完成操作。", reminder_interval_seconds: int = 20, lifespan: int = 1800, metadata_json: str = "{}") -> str:
+def showNimbleWindowTool(html: str, title: str = "灵动交互", recall_text: str = "用户仍在处理这个灵动窗口，请查看用户是否已完成操作。", reminder_interval_seconds: int = 120, lifespan: int = 1800, metadata_json: str = "{}") -> str:
     """
     Description:
         非阻塞地创建一个“灵动交互”窗口，并显示在前端虚拟形象旁边。
@@ -536,7 +536,7 @@ def showNimbleWindowTool(html: str, title: str = "灵动交互", recall_text: st
         html (str): 要展示在前端窗口中的 HTML 内容。
         title (str): 窗口标题。
         recall_text (str): reminder trigger 唤醒你时附带的提示信息。
-        reminder_interval_seconds (int): 窗口打开期间，提醒你关注该窗口的周期秒数。
+        reminder_interval_seconds (int): 窗口打开期间，提醒你关注该窗口的周期秒数。（默认为 120 秒，实际情况中不应短于120s）
         lifespan (int): 窗口生命周期（秒）。到期后窗口及关联 trigger 自动删除。
         metadata_json (str): 额外元数据 JSON 字符串。
     Returns:

@@ -11,6 +11,9 @@
     },
     "context_manager": {
       "enabled": true
+    },
+    "ui_operator": {
+      "enabled": true
     }
   },
   "configs": {
@@ -95,6 +98,74 @@
       "values": {
         "TRIGGER_USER_KEEP": 3,
         "NORMAL_USER_KEEP": 50
+      }
+    },
+    "ui_operator": {
+      "schema": [
+        {
+          "key": "OCR_LANGS",
+          "type": "json",
+          "label": "OCR语言列表",
+          "description": "",
+          "default": [
+            "ch_sim",
+            "en"
+          ]
+        },
+        {
+          "key": "OCR_GPU",
+          "type": "bool",
+          "label": "OCR启用GPU",
+          "description": "",
+          "default": false
+        },
+        {
+          "key": "OCR_MIN_CONF",
+          "type": "float",
+          "label": "OCR最小置信度",
+          "description": "",
+          "default": 0.3
+        },
+        {
+          "key": "PYAUTOGUI_PAUSE",
+          "type": "float",
+          "label": "每次GUI动作间隔秒数",
+          "description": "",
+          "default": 0.05
+        },
+        {
+          "key": "PYAUTOGUI_FAILSAFE",
+          "type": "bool",
+          "label": "启用鼠标角落紧急停止",
+          "description": "",
+          "default": true
+        },
+        {
+          "key": "DEFAULT_TYPE_INTERVAL",
+          "type": "float",
+          "label": "默认打字间隔秒数",
+          "description": "",
+          "default": 0.02
+        },
+        {
+          "key": "SCROLL_STEP",
+          "type": "int",
+          "label": "滚轮每档默认步长",
+          "description": "",
+          "default": 300
+        }
+      ],
+      "values": {
+        "OCR_LANGS": [
+          "ch_sim",
+          "en"
+        ],
+        "OCR_GPU": true,
+        "OCR_MIN_CONF": 0.3,
+        "PYAUTOGUI_PAUSE": 0.1,
+        "PYAUTOGUI_FAILSAFE": true,
+        "DEFAULT_TYPE_INTERVAL": 0.02,
+        "SCROLL_STEP": 300
       }
     }
   }

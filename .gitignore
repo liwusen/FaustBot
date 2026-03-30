@@ -37,3 +37,5 @@ package-lock.json
 *.db
 
 record/
+
+faust_plugin_market/

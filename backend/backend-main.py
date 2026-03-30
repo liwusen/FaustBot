@@ -751,7 +751,6 @@ async def command_websocket(websocket: WebSocket):
             if trigger_manager.has_queue_task() and not events.ignore_trigger_event.is_set():
                 # activate chat
                 task=trigger_manager.get_next_trigger()
-                print("[main] Trigger activated:",task)
                 trigger_text = f"<Trigger>触发器唤醒了你，请根据触发器内容执行相应操作。{str(task)}"
                 if isinstance(task, dict):
                     ttype = task.get("type")
@@ -780,7 +779,8 @@ async def command_websocket(websocket: WebSocket):
                             trigger_manager.delete_trigger(session["expire_trigger_id"])
                             backend2frontend.FrontEndCloseNimbleWindow({"callback_id": callback_id, "reason": "expired"})
                         trigger_text = f"<Trigger>灵动交互窗口已过期关闭。callback_id={callback_id}。如有必要，请重新创建更明确的新窗口。"
-                resp = await invoke_agent_locked(agent,{"messages":[{"role":"system","content":trigger_text}]})
+                print('[main] Trigger activated, invoking agent with trigger text:', trigger_text)
+                resp = await invoke_agent_locked(agent,{"messages":[{"role":"user","content":trigger_text}]})
                 reply = resp["messages"][-1].content
                 print('[main] Trigger activated reply', reply)
                 await websocket.send_text(f"SAY {reply}")
