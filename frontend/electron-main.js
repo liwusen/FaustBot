@@ -8,7 +8,26 @@ const { spawn } = require('child_process');
 let mainWindow = null;
 let tray = null;
 let pendingDeepLinks = [];
+const FAUST_PROTOCOL = 'faustbot';
 const FAUST_BACKEND_INSTALL_API = 'http://127.0.0.1:13900/faust/admin/plugin-market/install';
+
+function registerFaustProtocolClient() {
+  try {
+    let ok = false;
+    if (process.defaultApp && process.argv.length >= 2) {
+      // Dev mode: electron .
+      ok = app.setAsDefaultProtocolClient(FAUST_PROTOCOL, process.execPath, [path.resolve(process.argv[1])]);
+    } else {
+      // Packaged app
+      ok = app.setAsDefaultProtocolClient(FAUST_PROTOCOL);
+    }
+    console.log(`[deeplink] register protocol ${FAUST_PROTOCOL}:`, ok);
+    return ok;
+  } catch (e) {
+    console.warn('[deeplink] register protocol failed', e);
+    return false;
+  }
+}
 
 function postJson(url, payload, timeoutMs = 20000) {
   return new Promise((resolve, reject) => {
@@ -343,16 +362,12 @@ app.on('open-url', (event, url) => {
 });
 
 app.whenReady().then(()=>{
-  try {
-    app.setAsDefaultProtocolClient('faustbot');
-  } catch (e) {
-    console.warn('[deeplink] setAsDefaultProtocolClient failed', e);
-  }
+  registerFaustProtocolClient();
   createWindow();
   createTray();
   registerGlobalShortcuts();
   for (const arg of process.argv) {
-    if (typeof arg === 'string' && arg.startsWith('faustbot://')) {
+    if (typeof arg === 'string' && arg.startsWith(`${FAUST_PROTOCOL}://`)) {
       queueDeepLinkUrl(arg);
     }
   }

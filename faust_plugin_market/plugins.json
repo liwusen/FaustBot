@@ -16,11 +16,11 @@
       "id": "ui_operator",
       "name": "UI Operator",
       "description": "屏幕 OCR + 点击/右键/滚轮/键盘自动化插件。",
-      "author": "faust",
-      "version": "1.0.0",
-      "repo": "your-org/ui_operator_plugin",
+      "author": "allenlee",
+      "version": "0.1.0",
+      "repo": "liwusen/ui_operator.faust_plugin",
       "asset_name": "plugin_pack.zip",
-      "homepage": "https://github.com/your-org/ui_operator_plugin",
+      "homepage": "https://github.com/liwusen/ui_operator.faust_plugin",
       "tags": ["automation", "ocr", "desktop"]
     }
   ]
