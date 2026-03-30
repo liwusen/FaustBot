@@ -588,6 +588,7 @@ async def admin_plugin_market_install(payload: dict | None = None):
     body = payload or {}
     plugin_id = str(body.get("plugin_id") or body.get("id") or "").strip()
     index_url = body.get("index_url") or body.get("market_url")
+    overwrite = bool(body.get("overwrite", False))
     apply_runtime = bool(body.get("apply_runtime", True))
     reset_dialog = bool(body.get("reset_dialog", False))
     no_initial_chat = bool(body.get("no_initial_chat", True))
@@ -599,6 +600,7 @@ async def admin_plugin_market_install(payload: dict | None = None):
             plugin_id=plugin_id,
             plugins_dir=plugin_manager.plugins_dir,
             index_url=index_url,
+            overwrite=overwrite,
         )
         reload_summary = plugin_manager.reload()
         _sync_plugin_trigger_filters()
@@ -612,6 +614,8 @@ async def admin_plugin_market_install(payload: dict | None = None):
             "runtime": runtime_info,
             "items": plugin_manager.list_plugins(),
         }
+    except plugin_market.PluginAlreadyInstalledError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except plugin_market.PluginMarketError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

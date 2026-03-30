@@ -21,6 +21,10 @@ class PluginMarketError(RuntimeError):
     pass
 
 
+class PluginAlreadyInstalledError(PluginMarketError):
+    pass
+
+
 def resolve_market_index_url(override_url: str | None = None) -> str:
     if override_url and str(override_url).strip():
         return str(override_url).strip()
@@ -164,6 +168,7 @@ def install_plugin_from_catalog(
     plugin_id: str,
     plugins_dir: Path,
     index_url: str | None = None,
+    overwrite: bool = False,
 ) -> dict[str, Any]:
     plugin_id = str(plugin_id or "").strip()
     if not _SAFE_PLUGIN_ID.match(plugin_id):
@@ -183,6 +188,8 @@ def install_plugin_from_catalog(
     plugins_dir = Path(plugins_dir)
     plugins_dir.mkdir(parents=True, exist_ok=True)
     target_dir = plugins_dir / plugin_id
+    if target_dir.exists() and not overwrite:
+        raise PluginAlreadyInstalledError(f"插件 {plugin_id} 已安装，需确认覆盖后才能继续")
 
     with tempfile.TemporaryDirectory(prefix=f"faust-plugin-{plugin_id}-") as td:
         tmp_dir = Path(td)

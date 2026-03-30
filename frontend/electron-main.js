@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, Tray, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, Tray, Menu, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -56,7 +56,10 @@ function postJson(url, payload, timeoutMs = 20000) {
             parsed = { raw: text };
           }
           if ((res.statusCode || 500) >= 400) {
-            return reject(new Error(`HTTP ${res.statusCode}: ${text}`));
+            const err = new Error(`HTTP ${res.statusCode}: ${text}`);
+            err.statusCode = res.statusCode || 500;
+            err.response = parsed;
+            return reject(err);
           }
           resolve(parsed);
         });
@@ -100,8 +103,33 @@ function parseFaustDeepLink(rawUrl) {
 
 async function runInstallPluginByDeepLink(task) {
   if (!task || task.type !== 'install_plugin') return;
+
+  const targetWindow = mainWindow || BrowserWindow.getFocusedWindow() || undefined;
+  const firstConfirm = await dialog.showMessageBox(targetWindow, {
+    type: 'warning',
+    title: '确认安装第三方插件',
+    message: `即将安装插件：${task.pluginId}`,
+    detail: '该插件由第三方创建，可能包含安全风险。请仅安装你信任来源的插件。是否继续安装？',
+    buttons: ['继续安装', '取消'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  });
+  if (firstConfirm.response !== 0) {
+    if (mainWindow && mainWindow.webContents) {
+      mainWindow.webContents.send('plugin-install-result', {
+        ok: false,
+        pluginId: task.pluginId,
+        canceled: true,
+        error: '用户取消了插件安装',
+      });
+    }
+    return;
+  }
+
   const payload = {
     plugin_id: task.pluginId,
+    overwrite: false,
     apply_runtime: true,
     reset_dialog: false,
     no_initial_chat: true,
@@ -121,6 +149,59 @@ async function runInstallPluginByDeepLink(task) {
       });
     }
   } catch (e) {
+    const statusCode = Number(e && e.statusCode) || 0;
+    if (statusCode === 409) {
+      const overwriteConfirm = await dialog.showMessageBox(targetWindow, {
+        type: 'warning',
+        title: '插件已安装',
+        message: `插件 ${task.pluginId} 已存在`,
+        detail: '是否覆盖现有版本并继续安装？',
+        buttons: ['覆盖安装', '取消'],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+      });
+
+      if (overwriteConfirm.response === 0) {
+        try {
+          const overwriteResult = await postJson(FAUST_BACKEND_INSTALL_API, {
+            ...payload,
+            overwrite: true,
+          });
+          if (mainWindow && mainWindow.webContents) {
+            mainWindow.webContents.send('plugin-install-result', {
+              ok: true,
+              pluginId: task.pluginId,
+              overwritten: true,
+              result: overwriteResult,
+            });
+          }
+          return;
+        } catch (e2) {
+          console.error('[deeplink] plugin overwrite install failed:', task.pluginId, e2);
+          if (mainWindow && mainWindow.webContents) {
+            mainWindow.webContents.send('plugin-install-result', {
+              ok: false,
+              pluginId: task.pluginId,
+              overwritten: true,
+              error: String(e2),
+            });
+          }
+          return;
+        }
+      }
+
+      if (mainWindow && mainWindow.webContents) {
+        mainWindow.webContents.send('plugin-install-result', {
+          ok: false,
+          pluginId: task.pluginId,
+          canceled: true,
+          error: '用户取消了覆盖安装',
+        });
+      }
+      return;
+    }
+
     console.error('[deeplink] plugin install failed:', task.pluginId, e);
     if (mainWindow && mainWindow.webContents) {
       mainWindow.webContents.send('plugin-install-result', {
