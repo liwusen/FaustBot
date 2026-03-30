@@ -21,6 +21,15 @@ contextBridge.exposeInMainWorld('faust', {
         console.error('faust.onCommand callback failed', e);
       }
     });
+  },
+  onPluginInstallResult: (cb) => {
+    ipcRenderer.on('plugin-install-result', (_evt, payload) => {
+      try {
+        cb(payload);
+      } catch (e) {
+        console.error('faust.onPluginInstallResult callback failed', e);
+      }
+    });
   }
 });
 

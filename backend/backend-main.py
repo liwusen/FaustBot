@@ -26,6 +26,7 @@ import faust_backend.minecraft_client as minecraft_client
 import faust_backend.admin_runtime as admin_runtime
 import faust_backend.service_manager as service_manager
 import faust_backend.rag_client as rag_client
+import faust_backend.plugin_market as plugin_market
 from faust_backend.plugin_system import PluginManager
 import tqdm
 from os.path import join as pjoin
@@ -571,6 +572,50 @@ async def admin_set_plugin_config(plugin_id: str, payload: dict | None = None):
         "reload": reload_summary,
         "runtime": runtime_info,
     }
+
+
+@app.get("/faust/admin/plugin-market/catalog")
+async def admin_plugin_market_catalog(index_url: str | None = Query(default=None)):
+    try:
+        data = plugin_market.fetch_catalog(index_url=index_url)
+        return {"status": "ok", **data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"插件市场读取失败: {e}")
+
+
+@app.post("/faust/admin/plugin-market/install")
+async def admin_plugin_market_install(payload: dict | None = None):
+    body = payload or {}
+    plugin_id = str(body.get("plugin_id") or body.get("id") or "").strip()
+    index_url = body.get("index_url") or body.get("market_url")
+    apply_runtime = bool(body.get("apply_runtime", True))
+    reset_dialog = bool(body.get("reset_dialog", False))
+    no_initial_chat = bool(body.get("no_initial_chat", True))
+    if not plugin_id:
+        raise HTTPException(status_code=400, detail="缺少 plugin_id")
+
+    try:
+        install_info = plugin_market.install_plugin_from_catalog(
+            plugin_id=plugin_id,
+            plugins_dir=plugin_manager.plugins_dir,
+            index_url=index_url,
+        )
+        reload_summary = plugin_manager.reload()
+        _sync_plugin_trigger_filters()
+        runtime_info = None
+        if apply_runtime:
+            runtime_info = await rebuild_runtime(reset_dialog=reset_dialog, no_initial_chat=no_initial_chat)
+        return {
+            "status": "ok",
+            "install": install_info,
+            "reload": reload_summary,
+            "runtime": runtime_info,
+            "items": plugin_manager.list_plugins(),
+        }
+    except plugin_market.PluginMarketError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"插件安装失败: {e}")
 
 @app.delete("/faust/admin/agents/{agent_name}/checkpoint")
 async def admin_delete_agent_checkpoint(agent_name: str):

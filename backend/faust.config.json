@@ -21,5 +21,6 @@
     "LIVE2D_MODEL_Y": "",
     "FRONTEND_CLICK_THROUGH": true,
     "FRONTEND_DEFAULT_TTS_LANG": "zh",
+    "PLUGIN_MARKET_INDEX_URL": "https://raw.githubusercontent.com/faustbot-dev/faust_plugin_market/main/plugins.json",
     "TEMP_DIR": "temp"
 }

@@ -1,10 +1,137 @@
 const { app, BrowserWindow, ipcMain, globalShortcut, Tray, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
+const https = require('https');
 const { spawn } = require('child_process');
 
 let mainWindow = null;
 let tray = null;
+let pendingDeepLinks = [];
+const FAUST_BACKEND_INSTALL_API = 'http://127.0.0.1:13900/faust/admin/plugin-market/install';
+
+function postJson(url, payload, timeoutMs = 20000) {
+  return new Promise((resolve, reject) => {
+    try {
+      const u = new URL(url);
+      const data = Buffer.from(JSON.stringify(payload || {}), 'utf8');
+      const lib = u.protocol === 'https:' ? https : http;
+      const req = lib.request({
+        method: 'POST',
+        hostname: u.hostname,
+        port: u.port || (u.protocol === 'https:' ? 443 : 80),
+        path: `${u.pathname}${u.search || ''}`,
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': data.length,
+        },
+      }, (res) => {
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          let parsed = null;
+          try {
+            parsed = text ? JSON.parse(text) : null;
+          } catch (e) {
+            parsed = { raw: text };
+          }
+          if ((res.statusCode || 500) >= 400) {
+            return reject(new Error(`HTTP ${res.statusCode}: ${text}`));
+          }
+          resolve(parsed);
+        });
+      });
+
+      req.setTimeout(timeoutMs, () => {
+        req.destroy(new Error(`请求超时(${timeoutMs}ms)`));
+      });
+      req.on('error', reject);
+      req.write(data);
+      req.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+function parseFaustDeepLink(rawUrl) {
+  try {
+    if (!rawUrl || typeof rawUrl !== 'string') return null;
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== 'faustbot:') return null;
+    const action = (parsed.hostname || parsed.pathname.replace(/^\//, '') || '').trim();
+    if (action !== 'install_plugin') return null;
+    const pluginId = (parsed.searchParams.get('id') || '').trim();
+    const marketUrl = (parsed.searchParams.get('market') || '').trim();
+    if (!pluginId) {
+      throw new Error('缺少插件 id 参数');
+    }
+    return {
+      type: 'install_plugin',
+      pluginId,
+      marketUrl,
+      rawUrl,
+    };
+  } catch (e) {
+    console.error('[deeplink] parse failed:', rawUrl, e);
+    return null;
+  }
+}
+
+async function runInstallPluginByDeepLink(task) {
+  if (!task || task.type !== 'install_plugin') return;
+  const payload = {
+    plugin_id: task.pluginId,
+    apply_runtime: true,
+    reset_dialog: false,
+    no_initial_chat: true,
+  };
+  if (task.marketUrl) {
+    payload.market_url = task.marketUrl;
+  }
+
+  try {
+    const result = await postJson(FAUST_BACKEND_INSTALL_API, payload);
+    console.log('[deeplink] plugin install success:', task.pluginId, result);
+    if (mainWindow && mainWindow.webContents) {
+      mainWindow.webContents.send('plugin-install-result', {
+        ok: true,
+        pluginId: task.pluginId,
+        result,
+      });
+    }
+  } catch (e) {
+    console.error('[deeplink] plugin install failed:', task.pluginId, e);
+    if (mainWindow && mainWindow.webContents) {
+      mainWindow.webContents.send('plugin-install-result', {
+        ok: false,
+        pluginId: task.pluginId,
+        error: String(e),
+      });
+    }
+  }
+}
+
+async function flushPendingDeepLinks() {
+  if (!pendingDeepLinks.length) return;
+  const tasks = pendingDeepLinks.slice();
+  pendingDeepLinks = [];
+  for (const task of tasks) {
+    await runInstallPluginByDeepLink(task);
+  }
+}
+
+function queueDeepLinkUrl(rawUrl) {
+  const task = parseFaustDeepLink(rawUrl);
+  if (!task) return false;
+  pendingDeepLinks.push(task);
+  if (mainWindow) {
+    showMainWindow();
+    flushPendingDeepLinks();
+  }
+  return true;
+}
 
 function decodeWsTextMessage(data, isBinary = false) {
   if (typeof data === 'string') return data;
@@ -196,10 +323,40 @@ function createTray(){
   return tray;
 }
 
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on('second-instance', (_event, argv) => {
+    showMainWindow();
+    for (const arg of (argv || [])) {
+      if (typeof arg === 'string' && arg.startsWith('faustbot://')) {
+        queueDeepLinkUrl(arg);
+      }
+    }
+  });
+}
+
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  queueDeepLinkUrl(url);
+});
+
 app.whenReady().then(()=>{
+  try {
+    app.setAsDefaultProtocolClient('faustbot');
+  } catch (e) {
+    console.warn('[deeplink] setAsDefaultProtocolClient failed', e);
+  }
   createWindow();
   createTray();
   registerGlobalShortcuts();
+  for (const arg of process.argv) {
+    if (typeof arg === 'string' && arg.startsWith('faustbot://')) {
+      queueDeepLinkUrl(arg);
+    }
+  }
+  flushPendingDeepLinks();
   // Start WebSocket command client (main process)
   startCommandWS();
   app.on('activate', ()=>{ if (BrowserWindow.getAllWindows().length === 0) createWindow(); })
