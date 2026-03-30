@@ -1,11 +1,11 @@
 {
-  "updated_at": "2026-03-30T00:00:00Z",
+  "updated_at": "2026-03-30T00:17:05Z",
   "plugins": [
     {
       "id": "context_manager",
       "name": "Context Manager",
       "description": "智能上下文中间件：区分 Trigger 与普通用户消息，自动裁剪会话体积。",
-      "author": "faust",
+      "author": "allenlee",
       "version": "1.0.0",
       "repo": "your-org/context_manager_plugin",
       "asset_name": "plugin_pack.zip",
