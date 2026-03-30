@@ -1,0 +1,27 @@
+{
+  "updated_at": "2026-03-30T00:00:00Z",
+  "plugins": [
+    {
+      "id": "context_manager",
+      "name": "Context Manager",
+      "description": "智能上下文中间件：区分 Trigger 与普通用户消息，自动裁剪会话体积。",
+      "author": "faust",
+      "version": "1.0.0",
+      "repo": "your-org/context_manager_plugin",
+      "asset_name": "plugin_pack.zip",
+      "homepage": "https://github.com/your-org/context_manager_plugin",
+      "tags": ["middleware", "context", "chat"]
+    },
+    {
+      "id": "ui_operator",
+      "name": "UI Operator",
+      "description": "屏幕 OCR + 点击/右键/滚轮/键盘自动化插件。",
+      "author": "faust",
+      "version": "1.0.0",
+      "repo": "your-org/ui_operator_plugin",
+      "asset_name": "plugin_pack.zip",
+      "homepage": "https://github.com/your-org/ui_operator_plugin",
+      "tags": ["automation", "ocr", "desktop"]
+    }
+  ]
+}
