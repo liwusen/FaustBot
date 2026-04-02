@@ -10,6 +10,7 @@ import functools,inspect,os,sys
 import socket
 import io
 import datetime
+import re
 import faust_backend.gui_llm_lib as gui_llm_lib
 import faust_backend.trigger_manager as trigger_manager
 import faust_backend.nimble as nimble
@@ -41,6 +42,121 @@ def refresh_runtime_paths() -> None:
         RAG_TRACKER.refresh_runtime(conf.AGENT_ROOT, getattr(conf, "RAG_API_URL", None))
     else:
         RAG_TRACKER = rag_client.create_tracker(conf.AGENT_ROOT, getattr(conf, "RAG_API_URL", None))
+
+
+def _safe_read_file_range(file_path: str, start_line: int, end_line: int) -> str:
+    p = Path(file_path)
+    if not p.exists() or not p.is_file():
+        return f"文件不存在: {file_path}"
+    if start_line < 1:
+        start_line = 1
+    with p.open("r", encoding="utf-8") as f:
+        lines = f.readlines()
+    total = len(lines)
+    if total == 0:
+        return f"File: `{file_path}`. Empty file."
+    if end_line <= 0 or end_line > total:
+        end_line = total
+    if start_line > end_line:
+        return f"无效行范围: start_line={start_line}, end_line={end_line}"
+    body = "".join(lines[start_line - 1:end_line])
+    return f"File: `{file_path}`. Lines {start_line} to {end_line} ({total} lines total):\n{body}"
+
+
+def _extract_section_chunks(patch_text: str) -> list[tuple[str, str, list[str]]]:
+    lines = patch_text.splitlines()
+    if not lines:
+        raise ValueError("Patch 为空")
+    if lines[0].strip() != "*** Begin Patch" or lines[-1].strip() != "*** End Patch":
+        raise ValueError("Patch 必须以 *** Begin Patch 开始并以 *** End Patch 结束")
+
+    body = lines[1:-1]
+    chunks: list[tuple[str, str, list[str]]] = []
+    current_action = None
+    current_path = None
+    current_lines: list[str] = []
+
+    header_re = re.compile(r"^\*\*\*\s+(Add|Update|Delete)\s+File:\s+(.+?)\s*$")
+    for line in body:
+        m = header_re.match(line)
+        if m:
+            if current_action and current_path is not None:
+                chunks.append((current_action, current_path, current_lines))
+            current_action = m.group(1)
+            current_path = m.group(2).strip()
+            current_lines = []
+        else:
+            current_lines.append(line)
+
+    if current_action and current_path is not None:
+        chunks.append((current_action, current_path, current_lines))
+
+    if not chunks:
+        raise ValueError("Patch 中未找到任何文件操作段")
+    return chunks
+
+
+def _apply_update_hunks(original: str, section_lines: list[str]) -> str:
+    i = 0
+    content = original
+    while i < len(section_lines):
+        line = section_lines[i]
+        if line.startswith("@@"):
+            i += 1
+            old_lines: list[str] = []
+            new_lines: list[str] = []
+            while i < len(section_lines) and not section_lines[i].startswith("@@"):
+                row = section_lines[i]
+                if row.startswith("-"):
+                    old_lines.append(row[1:])
+                elif row.startswith("+"):
+                    new_lines.append(row[1:])
+                i += 1
+
+            old_chunk = "\n".join(old_lines)
+            new_chunk = "\n".join(new_lines)
+            if old_chunk:
+                if old_chunk not in content:
+                    raise ValueError(f"更新失败，未在文件中找到旧代码块:\n{old_chunk[:200]}")
+                content = content.replace(old_chunk, new_chunk, 1)
+            elif new_chunk:
+                # 无旧块时，退化为追加
+                if content and not content.endswith("\n"):
+                    content += "\n"
+                content += new_chunk
+        else:
+            i += 1
+    return content
+
+
+def _apply_patch_text(patch_text: str) -> str:
+    chunks = _extract_section_chunks(patch_text)
+    changed: list[str] = []
+    for action, target_path, section_lines in chunks:
+        p = Path(target_path)
+        if action == "Add":
+            p.parent.mkdir(parents=True, exist_ok=True)
+            add_lines = [row[1:] if row.startswith("+") else row for row in section_lines]
+            text = "\n".join(add_lines)
+            if text and not text.endswith("\n"):
+                text += "\n"
+            p.write_text(text, encoding="utf-8")
+            changed.append(f"Add {target_path}")
+        elif action == "Delete":
+            if p.exists():
+                p.unlink()
+            changed.append(f"Delete {target_path}")
+        elif action == "Update":
+            if not p.exists() or not p.is_file():
+                raise ValueError(f"Update 失败，文件不存在: {target_path}")
+            old = p.read_text(encoding="utf-8")
+            new = _apply_update_hunks(old, section_lines)
+            p.write_text(new, encoding="utf-8")
+            changed.append(f"Update {target_path}")
+        else:
+            raise ValueError(f"不支持的 patch 动作: {action}")
+
+    return "Patch 应用成功:\n" + "\n".join(changed)
 #define add to TOOLLIST wrapper
 def __init__():
     print("[llm_tools] Initializing llm_tools module...")
@@ -323,45 +439,67 @@ def listDirectoryTool(path: str) -> str:
 @add_to_tool_list
 @tool
 @record_func_name
-def readTextFileTool(file_path: str) -> str:
+def readTextFileTool(file_path: str, start_line: int = 1, end_line: int = 0) -> str:
     """
     Description:
-        读取指定文本文件的内容。
-        使用UTF-8编码读取文件。
-        这个工具只应该在用户需要时执行。
-        如果用户未说明，请勿擅自使用此工具。
+        读取指定文本文件的内容（支持按行范围读取）。
+        行为与 read_file 风格一致：
+        - file_path: 文件路径
+        - start_line: 起始行（1-based）
+        - end_line: 结束行（含），<=0 表示读到文件末尾
     Args:
         file_path (str): 需要读取的文本文件路径。
+        start_line (int): 起始行号（从1开始）。
+        end_line (int): 结束行号（包含该行）。
     Returns:
-        str: 文件内容的字符串表示，或者错误信息。
+        str: 指定行范围内容，或错误信息。
     """
     try:
         print("[llm_tools.readTextFileTool] Reading file:", file_path)
-        with open(file_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        return content
+        return _safe_read_file_range(file_path, int(start_line), int(end_line))
     except Exception as e:
         return f"读取文件出错: {str(e)}"
 @add_to_tool_list
 @tool
 @record_func_name
-def writeTextFileTool(file_path: str, content: str) -> str:
+def writeTextFileTool(file_path: str = "", content: str = "", patch_text: str = "") -> str:
     """
     Description:
-        将指定内容写入文本文件，使用UTF-8编码。
-        这个工具只应该在用户需要时执行。
-        如果用户未说明，请勿擅自使用此工具。
+        修改文件内容，支持两种模式：
+
+        1) Patch 模式（推荐）：
+           传入 patch_text，格式与 apply_patch 风格一致，例如：
+           *** Begin Patch
+           *** Update File: d:/a.txt
+           @@
+           -old
+           +new
+           *** End Patch
+
+        2) 覆写模式（向后兼容）：
+           传入 file_path + content，直接整文件写入。
+
     Args:
-        file_path (str): 需要写入的文本文件路径。
-        content (str): 需要写入文件的内容字符串。
+        file_path (str): 覆写模式下的目标文件路径。
+        content (str): 覆写模式下写入内容。
+        patch_text (str): Patch 文本。
     Returns:
         str: 写入成功的确认信息，或者错误信息。
     """
     try:
+        if patch_text and str(patch_text).strip():
+            print("[llm_tools.writeTextFileTool] Applying patch text")
+            return _apply_patch_text(patch_text)
+
+        if not file_path:
+            return "写入失败：未提供 file_path，或未提供 patch_text。"
+
         print("[llm_tools.writeTextFileTool] Writing to file:", file_path)
-        with open(file_path, 'w', encoding='utf-8') as f:
+        p = Path(file_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, 'w', encoding='utf-8') as f:
             f.write(content)
-        return "文件写入成功。"
+        return f"文件写入成功: {str(p)}"
     except Exception as e:
         return f"写入文件出错: {str(e)}"
 
@@ -774,11 +912,10 @@ def ragQueryTool(query: str, mode: str = "hybrid", only_need_context: bool = Tru
         同步（阻塞式）执行一次 RAG 查询(查询目标：你的对话记录和相关文档)，并直接返回结果。
         默认只返回检索到的相关内容，不让模型总结。
         本工具会接入文档管理器，用于确保 RAG 文档跟踪器已初始化并可用。
-        解释：文档管理器
             
     Args:
         query (str): 要查询的问题或关键词。
-        mode (str): 检索模式，可选 naive/local/global/hybrid/mix。
+        mode (str): 检索模式，可选 naive/local/global/hybrid/mix。（默认 hybrid）
         only_need_context (bool): 是否只返回检索上下文。默认 True。
     Returns:
         str: RAG 查询结果，或错误信息。
