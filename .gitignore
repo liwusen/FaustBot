@@ -39,3 +39,7 @@ package-lock.json
 record/
 
 *.zip
+
+*/rag*.json*
+
+*/triggers.json
