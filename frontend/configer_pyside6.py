@@ -1,10 +1,11 @@
 import json
 import sys
+import datetime
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 import os
 import requests
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QDateTime
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -30,6 +31,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QInputDialog,
+    QFileDialog,
+    QSpinBox,
 )
 from pathlib import Path
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -102,6 +105,63 @@ class RagDetailDialog(QDialog):
         root.addLayout(btn_row)
 
 
+class TriggerDetailDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Trigger 详情")
+        self.resize(680, 560)
+
+        root = QVBoxLayout(self)
+
+        common_group = QGroupBox("通用配置")
+        common_form = QFormLayout(common_group)
+        self.trigger_id_input = QLineEdit()
+        self.trigger_type_combo = QComboBox()
+        self.trigger_type_combo.addItems(["interval", "datetime", "py-eval"])
+        self.trigger_lifespan_input = QLineEdit()
+        self.trigger_lifespan_input.setPlaceholderText("可选，秒")
+        self.trigger_recall_input = QPlainTextEdit()
+        self.trigger_recall_input.setFixedHeight(90)
+        common_form.addRow("ID", self.trigger_id_input)
+        common_form.addRow("类型", self.trigger_type_combo)
+        common_form.addRow("lifespan", self.trigger_lifespan_input)
+        common_form.addRow("recall_description", self.trigger_recall_input)
+        root.addWidget(common_group)
+
+        self.trigger_interval_group = QGroupBox("Interval 配置")
+        interval_form = QFormLayout(self.trigger_interval_group)
+        self.trigger_interval_seconds = QSpinBox()
+        self.trigger_interval_seconds.setRange(1, 10**9)
+        self.trigger_interval_seconds.setValue(60)
+        interval_form.addRow("interval_seconds", self.trigger_interval_seconds)
+        root.addWidget(self.trigger_interval_group)
+
+        self.trigger_datetime_group = QGroupBox("Datetime 配置")
+        datetime_form = QFormLayout(self.trigger_datetime_group)
+        self.trigger_datetime_target = QDateTimeEdit()
+        self.trigger_datetime_target.setDisplayFormat(TIME_DISPLAY)
+        self.trigger_datetime_target.setCalendarPopup(True)
+        self.trigger_datetime_target.setDateTime(QDateTime.currentDateTime())
+        datetime_form.addRow("target", self.trigger_datetime_target)
+        root.addWidget(self.trigger_datetime_group)
+
+        self.trigger_pyeval_group = QGroupBox("Py-eval 配置")
+        pyeval_form = QFormLayout(self.trigger_pyeval_group)
+        self.trigger_eval_code = QPlainTextEdit()
+        self.trigger_eval_code.setPlaceholderText("例如: datetime.datetime.now().hour == 9")
+        self.trigger_eval_code.setFixedHeight(120)
+        pyeval_form.addRow("eval_code", self.trigger_eval_code)
+        root.addWidget(self.trigger_pyeval_group)
+
+        btn_row = QHBoxLayout()
+        self.close_btn = QPushButton("关闭")
+        self.save_btn = QPushButton("保存 Trigger")
+        btn_row.addStretch(1)
+        btn_row.addWidget(self.close_btn)
+        btn_row.addWidget(self.save_btn)
+        root.addLayout(btn_row)
+
+
 class ConfigerWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -130,6 +190,10 @@ class ConfigerWindow(QMainWindow):
                 "items": [],
                 "selected_id": None,
                 "hot_reload": {},
+            },
+            "triggers": {
+                "items": [],
+                "selected_id": None,
             },
         }
 
@@ -189,6 +253,7 @@ class ConfigerWindow(QMainWindow):
         self._build_live2d_tab()
         self._build_rag_tab()
         self._build_runtime_tab()
+        self._build_trigger_tab()
         self._build_plugins_tab()
 
         status = QStatusBar()
@@ -345,27 +410,31 @@ class ConfigerWindow(QMainWindow):
         self.plugin_reload_btn = QPushButton("重载插件")
         self.plugin_enable_btn = QPushButton("启用插件")
         self.plugin_disable_btn = QPushButton("禁用插件")
+        self.plugin_delete_btn = QPushButton("删除插件")
         top_btn.addWidget(self.plugin_refresh_btn)
         top_btn.addWidget(self.plugin_reload_btn)
         top_btn.addWidget(self.plugin_enable_btn)
         top_btn.addWidget(self.plugin_disable_btn)
+        top_btn.addWidget(self.plugin_delete_btn)
         left.addLayout(top_btn)
 
-        hot_btn = QHBoxLayout()
-        self.plugin_hot_reload_start_btn = QPushButton("开启热重载")
-        self.plugin_hot_reload_stop_btn = QPushButton("关闭热重载")
-        self.plugin_hot_reload_status = QLabel("热重载: -")
-        hot_btn.addWidget(self.plugin_hot_reload_start_btn)
-        hot_btn.addWidget(self.plugin_hot_reload_stop_btn)
-        hot_btn.addWidget(self.plugin_hot_reload_status)
-        left.addLayout(hot_btn)
+        zip_btn = QHBoxLayout()
+        self.plugin_install_zip_btn = QPushButton("从 ZIP 安装")
+        self.plugin_package_zip_btn = QPushButton("打包为 ZIP")
+        zip_btn.addWidget(self.plugin_install_zip_btn)
+        zip_btn.addWidget(self.plugin_package_zip_btn)
+        left.addLayout(zip_btn)
+
+        self.plugin_reload_mode_label = QLabel("插件重载模式: 手动")
+        left.addWidget(self.plugin_reload_mode_label)
 
         self.plugin_refresh_btn.clicked.connect(self.load_plugins)
         self.plugin_reload_btn.clicked.connect(self.reload_plugins)
         self.plugin_enable_btn.clicked.connect(lambda: self.set_plugin_enabled(True))
         self.plugin_disable_btn.clicked.connect(lambda: self.set_plugin_enabled(False))
-        self.plugin_hot_reload_start_btn.clicked.connect(self.start_plugin_hot_reload)
-        self.plugin_hot_reload_stop_btn.clicked.connect(self.stop_plugin_hot_reload)
+        self.plugin_delete_btn.clicked.connect(self.delete_plugin)
+        self.plugin_install_zip_btn.clicked.connect(self.install_plugin_from_zip)
+        self.plugin_package_zip_btn.clicked.connect(self.package_plugin_zip)
 
         right = QVBoxLayout()
         self.plugin_meta_view = QPlainTextEdit()
@@ -399,6 +468,52 @@ class ConfigerWindow(QMainWindow):
 
         layout.addWidget(split, 1)
         self.tabs.addTab(tab, "插件管理")
+
+    def _build_trigger_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        self.trigger_table = QTableWidget(0, 4)
+        self.trigger_table.setHorizontalHeaderLabels(["id", "type", "lifespan", "描述"])
+        self.trigger_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.trigger_table.setSelectionMode(QTableWidget.SingleSelection)
+        self.trigger_table.itemSelectionChanged.connect(self._on_trigger_selected)
+        self.trigger_table.itemDoubleClicked.connect(lambda _: self.open_trigger_detail())
+        layout.addWidget(QLabel("Trigger 列表（仅显示 interval / datetime / py-eval）"))
+        layout.addWidget(self.trigger_table, 1)
+
+        left_btn = QHBoxLayout()
+        self.trigger_refresh_btn = QPushButton("刷新")
+        self.trigger_open_detail_btn = QPushButton("详情/编辑")
+        self.trigger_new_btn = QPushButton("新建")
+        self.trigger_delete_btn = QPushButton("删除")
+        self.trigger_refresh_btn.clicked.connect(self.load_triggers)
+        self.trigger_open_detail_btn.clicked.connect(self.open_trigger_detail)
+        self.trigger_new_btn.clicked.connect(self.new_trigger)
+        self.trigger_delete_btn.clicked.connect(self.delete_trigger)
+        left_btn.addWidget(self.trigger_refresh_btn)
+        left_btn.addWidget(self.trigger_open_detail_btn)
+        left_btn.addWidget(self.trigger_new_btn)
+        left_btn.addWidget(self.trigger_delete_btn)
+        layout.addLayout(left_btn)
+        self.tabs.addTab(tab, "Trigger 管理")
+
+        self.trigger_detail_dialog = TriggerDetailDialog(self)
+        self.trigger_id_input = self.trigger_detail_dialog.trigger_id_input
+        self.trigger_type_combo = self.trigger_detail_dialog.trigger_type_combo
+        self.trigger_lifespan_input = self.trigger_detail_dialog.trigger_lifespan_input
+        self.trigger_recall_input = self.trigger_detail_dialog.trigger_recall_input
+        self.trigger_interval_group = self.trigger_detail_dialog.trigger_interval_group
+        self.trigger_interval_seconds = self.trigger_detail_dialog.trigger_interval_seconds
+        self.trigger_datetime_group = self.trigger_detail_dialog.trigger_datetime_group
+        self.trigger_datetime_target = self.trigger_detail_dialog.trigger_datetime_target
+        self.trigger_pyeval_group = self.trigger_detail_dialog.trigger_pyeval_group
+        self.trigger_eval_code = self.trigger_detail_dialog.trigger_eval_code
+
+        self.trigger_type_combo.currentTextChanged.connect(self._on_trigger_type_changed)
+        self.trigger_detail_dialog.save_btn.clicked.connect(self.save_trigger)
+        self.trigger_detail_dialog.close_btn.clicked.connect(self.trigger_detail_dialog.close)
+        self._on_trigger_type_changed(self.trigger_type_combo.currentText())
 
     def _build_rag_tab(self):
         tab = QWidget()
@@ -621,14 +736,10 @@ class ConfigerWindow(QMainWindow):
     def load_plugins(self):
         data = self.api_request("GET", "/faust/admin/plugins")
         items = data.get("items") or []
-        hot = data.get("hot_reload") or {}
 
         self.state["plugins"]["items"] = items
-        self.state["plugins"]["hot_reload"] = hot
-
-        self.plugin_hot_reload_status.setText(
-            f"热重载: {'开启' if hot.get('enabled') else '关闭'} | 轮询 {hot.get('interval_sec', '-') }s"
-        )
+        self.state["plugins"]["hot_reload"] = {"enabled": False, "manual_reload_only": True}
+        self.plugin_reload_mode_label.setText("插件重载模式: 手动")
 
         selected_id = self.state["plugins"].get("selected_id")
         self.plugin_list.clear()
@@ -762,22 +873,6 @@ class ConfigerWindow(QMainWindow):
         except Exception as e:
             self.fail("插件开关失败", e)
 
-    def start_plugin_hot_reload(self):
-        try:
-            self.api_request("POST", "/faust/admin/plugins/hot-reload/start", payload={"interval_sec": 2.0})
-            self.load_plugins()
-            self.notify("插件热重载已开启")
-        except Exception as e:
-            self.fail("开启热重载失败", e)
-
-    def stop_plugin_hot_reload(self):
-        try:
-            self.api_request("POST", "/faust/admin/plugins/hot-reload/stop")
-            self.load_plugins()
-            self.notify("插件热重载已关闭")
-        except Exception as e:
-            self.fail("关闭热重载失败", e)
-
     def save_plugin_config(self):
         pid = self._selected_plugin_id()
         if not pid:
@@ -803,6 +898,75 @@ class ConfigerWindow(QMainWindow):
             self.notify(f"插件 {pid} 配置已保存并重载")
         except Exception as e:
             self.fail("保存插件配置失败", e)
+
+    def delete_plugin(self):
+        pid = self._selected_plugin_id()
+        if not pid:
+            return
+        if QMessageBox.question(self, "删除插件", f"确定删除插件 {pid} 吗？这将删除插件目录。") != QMessageBox.Yes:
+            return
+        try:
+            self.api_request(
+                "DELETE",
+                f"/faust/admin/plugins/{requests.utils.quote(pid, safe='')}",
+                params={"apply_runtime": "true", "reset_dialog": "false", "no_initial_chat": "true"},
+            )
+            self.state["plugins"]["selected_id"] = None
+            self.load_plugins()
+            self.notify(f"插件已删除: {pid}")
+        except Exception as e:
+            self.fail("删除插件失败", e)
+
+    def install_plugin_from_zip(self):
+        zip_path, _ = QFileDialog.getOpenFileName(self, "选择插件 ZIP", "", "ZIP Files (*.zip)")
+        if not zip_path:
+            return
+        overwrite = QMessageBox.question(
+            self,
+            "覆盖已存在插件",
+            "如果插件已存在，是否覆盖安装？",
+        ) == QMessageBox.Yes
+        try:
+            self.api_request(
+                "POST",
+                "/faust/admin/plugins/install-zip",
+                payload={
+                    "zip_path": zip_path,
+                    "overwrite": overwrite,
+                    "apply_runtime": True,
+                    "reset_dialog": False,
+                    "no_initial_chat": True,
+                },
+            )
+            self.load_plugins()
+            self.notify("插件 ZIP 安装完成并已应用到运行时")
+        except Exception as e:
+            self.fail("从 ZIP 安装插件失败", e)
+
+    def package_plugin_zip(self):
+        pid = self._selected_plugin_id()
+        if not pid:
+            return
+
+        output_dir = QFileDialog.getExistingDirectory(self, "选择 ZIP 输出目录（可取消使用默认目录）")
+        zip_name, ok = QInputDialog.getText(self, "ZIP 文件名", "请输入 ZIP 文件名（可留空使用默认）")
+        if not ok:
+            return
+        zip_name = zip_name.strip()
+
+        payload: Dict[str, Any] = {"plugin_id": pid}
+        if output_dir:
+            payload["output_dir"] = output_dir
+        if zip_name:
+            payload["zip_name"] = zip_name
+
+        try:
+            data = self.api_request("POST", "/faust/admin/plugins/package-zip", payload=payload)
+            package = data.get("package") or {}
+            self.notify(f"插件已打包: {package.get('zip_path') or '-'}")
+            QMessageBox.information(self, "打包完成", f"插件已打包为 ZIP:\n{package.get('zip_path') or '-'}")
+        except Exception as e:
+            self.fail("插件打包失败", e)
 
     def load_rag_documents(self, reset_page: bool = False):
         rag = self.state["rag"]
@@ -848,6 +1012,7 @@ class ConfigerWindow(QMainWindow):
             self.load_runtime_summary()
             self.load_services()
             self.load_rag_documents(reset_page=False)
+            self.load_triggers()
             self.load_plugins()
             self.notify("已刷新配置与运行状态")
         except Exception as e:
@@ -1156,6 +1321,187 @@ class ConfigerWindow(QMainWindow):
             self.notify(f"RAG 记录已删除: {doc_id}")
         except Exception as e:
             self.fail("删除 RAG 失败", e)
+
+    # ---------- Trigger ----------
+    def _allowed_trigger_types(self) -> set[str]:
+        return {"interval", "datetime", "py-eval"}
+
+    def _on_trigger_type_changed(self, t: str):
+        self.trigger_interval_group.setVisible(t == "interval")
+        self.trigger_datetime_group.setVisible(t == "datetime")
+        self.trigger_pyeval_group.setVisible(t == "py-eval")
+
+    def _selected_trigger_id(self) -> Optional[str]:
+        row = self.trigger_table.currentRow()
+        if row < 0:
+            return None
+        item = self.trigger_table.item(row, 0)
+        return item.text().strip() if item else None
+
+    def _safe_parse_qdatetime(self, raw: str) -> QDateTime:
+        text = (raw or "").strip()
+        if not text:
+            return QDateTime.currentDateTime()
+
+        dt_obj = QDateTime.fromString(text, TIME_DISPLAY)
+        if dt_obj.isValid():
+            return dt_obj
+        dt_obj = QDateTime.fromString(text, Qt.ISODate)
+        if dt_obj.isValid():
+            return dt_obj
+        dt_obj = QDateTime.fromString(text, Qt.ISODateWithMs)
+        if dt_obj.isValid():
+            return dt_obj
+
+        try:
+            py_dt = datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+            return QDateTime(py_dt)
+        except Exception:
+            return QDateTime.currentDateTime()
+
+    def _apply_trigger_to_form(self, item: Dict[str, Any]):
+        self.trigger_id_input.setText(str(item.get("id") or ""))
+        t = str(item.get("type") or "interval")
+        if t not in self._allowed_trigger_types():
+            t = "interval"
+        self.trigger_type_combo.setCurrentText(t)
+
+        lifespan = item.get("lifespan")
+        self.trigger_lifespan_input.setText("" if lifespan in (None, "") else str(lifespan))
+        self.trigger_recall_input.setPlainText(str(item.get("recall_description") or ""))
+
+        self.trigger_interval_seconds.setValue(max(1, int(item.get("interval_seconds") or 60)))
+        self.trigger_datetime_target.setDateTime(
+            self._safe_parse_qdatetime(str(item.get("target") or ""))
+        )
+        self.trigger_eval_code.setPlainText(str(item.get("eval_code") or ""))
+        self._on_trigger_type_changed(t)
+
+    def _collect_trigger_payload(self) -> Dict[str, Any]:
+        trigger_id = self.trigger_id_input.text().strip()
+        if not trigger_id:
+            raise ValueError("Trigger ID 不能为空")
+
+        t = self.trigger_type_combo.currentText().strip()
+        if t not in self._allowed_trigger_types():
+            raise ValueError("不支持的 Trigger 类型")
+
+        payload: Dict[str, Any] = {
+            "id": trigger_id,
+            "type": t,
+        }
+
+        recall = self.trigger_recall_input.toPlainText().strip()
+        if recall:
+            payload["recall_description"] = recall
+
+        lifespan_text = self.trigger_lifespan_input.text().strip()
+        if lifespan_text:
+            lifespan = int(lifespan_text)
+            if lifespan <= 0:
+                raise ValueError("lifespan 必须是正整数")
+            payload["lifespan"] = lifespan
+
+        if t == "interval":
+            payload["interval_seconds"] = int(self.trigger_interval_seconds.value())
+        elif t == "datetime":
+            payload["target"] = self.trigger_datetime_target.dateTime().toString(TIME_DISPLAY)
+        elif t == "py-eval":
+            code = self.trigger_eval_code.toPlainText().strip()
+            if not code:
+                raise ValueError("py-eval 类型必须填写 eval_code")
+            payload["eval_code"] = code
+
+        return payload
+
+    def load_triggers(self):
+        data = self.api_request("GET", "/faust/admin/triggers")
+        items = data.get("items") or []
+        allowed = self._allowed_trigger_types()
+        filtered = [t for t in items if str((t or {}).get("type") or "") in allowed]
+        self.state["triggers"]["items"] = filtered
+
+        selected_id = self.state["triggers"].get("selected_id")
+        self.trigger_table.setRowCount(len(filtered))
+        row_to_select = -1
+        for i, trig in enumerate(filtered):
+            tid = str(trig.get("id") or "")
+            ttype = str(trig.get("type") or "")
+            lifespan = "" if trig.get("lifespan") is None else str(trig.get("lifespan"))
+            desc = str(trig.get("recall_description") or "")
+            self.trigger_table.setItem(i, 0, QTableWidgetItem(tid))
+            self.trigger_table.setItem(i, 1, QTableWidgetItem(ttype))
+            self.trigger_table.setItem(i, 2, QTableWidgetItem(lifespan))
+            self.trigger_table.setItem(i, 3, QTableWidgetItem(desc))
+            if selected_id and selected_id == tid:
+                row_to_select = i
+
+        if row_to_select >= 0:
+            self.trigger_table.setCurrentCell(row_to_select, 0)
+        elif self.trigger_table.rowCount() > 0:
+            self.trigger_table.setCurrentCell(0, 0)
+        else:
+            self.new_trigger()
+
+    def _on_trigger_selected(self):
+        tid = self._selected_trigger_id()
+        self.state["triggers"]["selected_id"] = tid
+
+    def open_trigger_detail(self):
+        tid = self._selected_trigger_id()
+        if not tid:
+            return
+        item = None
+        for t in self.state["triggers"].get("items") or []:
+            if str(t.get("id") or "") == tid:
+                item = t
+                break
+        if not item:
+            return
+        self._apply_trigger_to_form(item)
+        self.trigger_detail_dialog.setWindowTitle(f"Trigger 详情 · {tid}")
+        self.trigger_detail_dialog.show()
+        self.trigger_detail_dialog.raise_()
+        self.trigger_detail_dialog.activateWindow()
+
+    def new_trigger(self):
+        self.trigger_id_input.clear()
+        self.trigger_type_combo.setCurrentText("interval")
+        self.trigger_lifespan_input.clear()
+        self.trigger_recall_input.clear()
+        self.trigger_interval_seconds.setValue(60)
+        self.trigger_datetime_target.setDateTime(QDateTime.currentDateTime())
+        self.trigger_eval_code.clear()
+        self.state["triggers"]["selected_id"] = None
+        self.trigger_detail_dialog.setWindowTitle("新建 Trigger")
+        self.trigger_detail_dialog.show()
+        self.trigger_detail_dialog.raise_()
+        self.trigger_detail_dialog.activateWindow()
+
+    def save_trigger(self):
+        try:
+            payload = self._collect_trigger_payload()
+            self.api_request("POST", "/faust/admin/triggers", payload=payload)
+            self.state["triggers"]["selected_id"] = payload.get("id")
+            self.load_triggers()
+            self.notify(f"Trigger 已保存: {payload.get('id')}")
+            self.trigger_detail_dialog.close()
+        except Exception as e:
+            self.fail("保存 Trigger 失败", e)
+
+    def delete_trigger(self):
+        tid = self._selected_trigger_id() or self.trigger_id_input.text().strip()
+        if not tid:
+            return
+        if QMessageBox.question(self, "删除 Trigger", f"确定删除 {tid} 吗？") != QMessageBox.Yes:
+            return
+        try:
+            self.api_request("DELETE", f"/faust/admin/triggers/{requests.utils.quote(tid, safe='')}")
+            self.state["triggers"]["selected_id"] = None
+            self.load_triggers()
+            self.notify(f"Trigger 已删除: {tid}")
+        except Exception as e:
+            self.fail("删除 Trigger 失败", e)
 
 
 if __name__ == "__main__":

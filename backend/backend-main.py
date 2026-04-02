@@ -51,8 +51,6 @@ forward_queue=queue.Queue()
 agent=None
 agent_lock = asyncio.Lock()
 plugin_manager = PluginManager()
-plugin_hot_reload_task = None
-plugin_hot_reload_busy = False
 plugin_heartbeat_task = None
 AGENT_NAME=conf.AGENT_NAME
 PROMPT = ""
@@ -140,27 +138,6 @@ def _compose_runtime_extensions():
 def _sync_plugin_trigger_filters():
     trigger_manager.set_append_filters([plugin_manager.filter_trigger_on_append])
     trigger_manager.set_fire_filters([plugin_manager.filter_trigger_on_fire])
-
-
-async def _plugin_hot_reload_loop():
-    global plugin_hot_reload_busy
-    while True:
-        try:
-            status = plugin_manager.hot_reload_status()
-            await asyncio.sleep(float(status.get("interval_sec") or 2.0))
-            tick = plugin_manager.hot_reload_tick()
-            if tick.get("changed") and not plugin_hot_reload_busy:
-                plugin_hot_reload_busy = True
-                try:
-                    _sync_plugin_trigger_filters()
-                    await rebuild_runtime(reset_dialog=False, no_initial_chat=True)
-                finally:
-                    plugin_hot_reload_busy = False
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            print(f"[plugin.hot-reload] loop error: {e}")
-            await asyncio.sleep(1.0)
 
 
 async def _plugin_heartbeat_loop():
@@ -269,7 +246,7 @@ async def rebuild_runtime(*, reset_dialog: bool = False, no_initial_chat: bool =
 
 @app.on_event("startup")
 async def startup_event():
-    global agent,checkpointer,conn,storer,conn_for_store,plugin_hot_reload_task,plugin_heartbeat_task
+    global agent,checkpointer,conn,storer,conn_for_store,plugin_heartbeat_task
     #--- Initialize the agent and its tools&middleware, including setting up the checkpoint saver and store.
     if not os.path.exists(pjoin(AGENT_ROOT,'faust_checkpoint.db')):
         print(f"[main] Checkpoint database not found at {pjoin(AGENT_ROOT,'faust_checkpoint.db')}. Starting with a fresh checkpoint.")
@@ -311,8 +288,6 @@ async def startup_event():
     except Exception as e:
         print(f"[main] Minecraft bridge not connected on startup: {e}")
     llm_tools.STARTED=True# 声明启动完成
-    if plugin_hot_reload_task is None:
-        plugin_hot_reload_task = asyncio.create_task(_plugin_hot_reload_loop())
     if plugin_heartbeat_task is None:
         plugin_heartbeat_task = asyncio.create_task(_plugin_heartbeat_loop())
     print("[main]FAUST Backend Main Service started.")
@@ -468,12 +443,58 @@ async def admin_list_live2d_models():
     return {"items": admin_runtime.list_available_models()}
 
 
+@app.get("/faust/admin/triggers")
+async def admin_list_triggers():
+    return {"status": "ok", "items": trigger_manager.list_triggers()}
+
+
+@app.get("/faust/admin/triggers/{trigger_id}")
+async def admin_get_trigger(trigger_id: str):
+    item = trigger_manager.get_trigger(trigger_id)
+    if not item:
+        raise HTTPException(status_code=404, detail=f"Trigger not found: {trigger_id}")
+    return {"status": "ok", "item": item}
+
+
+@app.post("/faust/admin/triggers")
+async def admin_create_or_upsert_trigger(payload: dict | None = None):
+    body = payload or {}
+    try:
+        trigger_manager.append_trigger(body)
+        tid = str(body.get("id") or "")
+        return {
+            "status": "ok",
+            "item": trigger_manager.get_trigger(tid) if tid else body,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Trigger 保存失败: {e}")
+
+
+@app.put("/faust/admin/triggers/{trigger_id}")
+async def admin_update_trigger(trigger_id: str, payload: dict | None = None):
+    body = payload or {}
+    try:
+        trigger_manager.update_trigger(trigger_id, body)
+        return {"status": "ok", "item": trigger_manager.get_trigger(trigger_id)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Trigger 更新失败: {e}")
+
+
+@app.delete("/faust/admin/triggers/{trigger_id}")
+async def admin_delete_trigger(trigger_id: str):
+    existed = trigger_manager.get_trigger(trigger_id) is not None
+    trigger_manager.delete_trigger(trigger_id)
+    if not existed:
+        raise HTTPException(status_code=404, detail=f"Trigger not found: {trigger_id}")
+    return {"status": "ok", "deleted": trigger_id}
+
+
 @app.get("/faust/admin/plugins")
 async def admin_list_plugins():
     return {
         "status": "ok",
         "items": plugin_manager.list_plugins(),
-        "hot_reload": plugin_manager.hot_reload_status(),
+        "manual_reload_only": True,
     }
 
 
@@ -492,13 +513,13 @@ async def admin_reload_plugins(payload: dict | None = None):
         "reload": summary,
         "runtime": runtime_info,
         "items": plugin_manager.list_plugins(),
-        "hot_reload": plugin_manager.hot_reload_status(),
+        "manual_reload_only": True,
     }
 
 
 @app.get("/faust/admin/plugins/hot-reload")
 async def admin_plugins_hot_reload_status():
-    return {"status": "ok", "hot_reload": plugin_manager.hot_reload_status()}
+    return {"status": "ok", "manual_reload_only": True, "enabled": False}
 
 
 @app.post("/faust/admin/plugins/heartbeat")
@@ -508,15 +529,20 @@ async def admin_plugins_heartbeat_once():
 
 @app.post("/faust/admin/plugins/hot-reload/start")
 async def admin_plugins_hot_reload_start(payload: dict | None = None):
-    interval_sec = (payload or {}).get("interval_sec")
-    state = plugin_manager.configure_hot_reload(enabled=True, interval_sec=interval_sec)
-    return {"status": "ok", "hot_reload": state}
+    return {
+        "status": "ok",
+        "manual_reload_only": True,
+        "detail": "已禁用自动轮询热重载，请使用手动重载接口 /faust/admin/plugins/reload",
+    }
 
 
 @app.post("/faust/admin/plugins/hot-reload/stop")
 async def admin_plugins_hot_reload_stop():
-    state = plugin_manager.configure_hot_reload(enabled=False)
-    return {"status": "ok", "hot_reload": state}
+    return {
+        "status": "ok",
+        "manual_reload_only": True,
+        "detail": "当前仅支持手动重载",
+    }
 
 
 @app.post("/faust/admin/plugins/{plugin_id}/enable")
@@ -620,6 +646,97 @@ async def admin_plugin_market_install(payload: dict | None = None):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"插件安装失败: {e}")
+
+
+@app.post("/faust/admin/plugins/install-zip")
+async def admin_plugins_install_zip(payload: dict | None = None):
+    body = payload or {}
+    zip_path = str(body.get("zip_path") or "").strip()
+    expected_plugin_id = str(body.get("plugin_id") or "").strip() or None
+    overwrite = bool(body.get("overwrite", False))
+    apply_runtime = bool(body.get("apply_runtime", True))
+    reset_dialog = bool(body.get("reset_dialog", False))
+    no_initial_chat = bool(body.get("no_initial_chat", True))
+    if not zip_path:
+        raise HTTPException(status_code=400, detail="缺少 zip_path")
+
+    try:
+        install_info = plugin_market.install_plugin_from_zip(
+            zip_path=zip_path,
+            plugins_dir=plugin_manager.plugins_dir,
+            overwrite=overwrite,
+            expected_plugin_id=expected_plugin_id,
+        )
+        reload_summary = plugin_manager.reload()
+        _sync_plugin_trigger_filters()
+        runtime_info = None
+        if apply_runtime:
+            runtime_info = await rebuild_runtime(reset_dialog=reset_dialog, no_initial_chat=no_initial_chat)
+        return {
+            "status": "ok",
+            "install": install_info,
+            "reload": reload_summary,
+            "runtime": runtime_info,
+            "items": plugin_manager.list_plugins(),
+        }
+    except plugin_market.PluginAlreadyInstalledError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except plugin_market.PluginMarketError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"ZIP 插件安装失败: {e}")
+
+
+@app.post("/faust/admin/plugins/package-zip")
+async def admin_plugins_package_zip(payload: dict | None = None):
+    body = payload or {}
+    plugin_id = str(body.get("plugin_id") or body.get("id") or "").strip()
+    output_dir = body.get("output_dir")
+    zip_name = body.get("zip_name")
+    if not plugin_id:
+        raise HTTPException(status_code=400, detail="缺少 plugin_id")
+
+    try:
+        package_info = plugin_market.package_plugin_to_zip(
+            plugin_id=plugin_id,
+            plugins_dir=plugin_manager.plugins_dir,
+            output_dir=output_dir,
+            zip_name=zip_name,
+        )
+        return {
+            "status": "ok",
+            "package": package_info,
+        }
+    except plugin_market.PluginMarketError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"插件打包失败: {e}")
+
+
+@app.delete("/faust/admin/plugins/{plugin_id}")
+async def admin_delete_plugin(plugin_id: str, apply_runtime: bool = True, reset_dialog: bool = False, no_initial_chat: bool = True):
+    try:
+        delete_info = plugin_market.delete_installed_plugin(
+            plugin_id=plugin_id,
+            plugins_dir=plugin_manager.plugins_dir,
+            state_file=plugin_manager.state_file,
+        )
+        reload_summary = plugin_manager.reload()
+        _sync_plugin_trigger_filters()
+        runtime_info = None
+        if apply_runtime:
+            runtime_info = await rebuild_runtime(reset_dialog=reset_dialog, no_initial_chat=no_initial_chat)
+        return {
+            "status": "ok",
+            "deleted": delete_info,
+            "reload": reload_summary,
+            "runtime": runtime_info,
+            "items": plugin_manager.list_plugins(),
+        }
+    except plugin_market.PluginMarketError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"插件删除失败: {e}")
 
 @app.delete("/faust/admin/agents/{agent_name}/checkpoint")
 async def admin_delete_agent_checkpoint(agent_name: str):
@@ -954,7 +1071,7 @@ async def shutdown_post():
     return {"status": "shutting_down"}
 @app.on_event("shutdown")
 async def shutdown_event():
-    global plugin_hot_reload_task, plugin_heartbeat_task
+    global plugin_heartbeat_task
     print("")
     #only add to checkpoint
     with open("faust_main.log","a",encoding="utf-8") as f:
@@ -965,13 +1082,6 @@ async def shutdown_event():
         await conn_for_store.commit()
         await conn_for_store.close()
     trigger_manager.stop_trigger_watchdog_thread()
-    if plugin_hot_reload_task is not None:
-        plugin_hot_reload_task.cancel()
-        try:
-            await plugin_hot_reload_task
-        except Exception:
-            pass
-        plugin_hot_reload_task = None
     if plugin_heartbeat_task is not None:
         plugin_heartbeat_task.cancel()
         try:

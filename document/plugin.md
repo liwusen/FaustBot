@@ -7,7 +7,7 @@
 1. 插件可注册 Tool 与 Middleware；启用插件时整体生效，禁用时整体失效。
 2. 插件可在 Trigger append/fire 两阶段做过滤。
 3. 插件可通过 `PluginContext` 直接对 Trigger 做 CRUD。
-4. 插件支持热重载与 Heartbeat（后端每 10 秒调用一次）。
+4. 插件支持手动重载与 Heartbeat（后端每 10 秒调用一次）。
 5. 插件支持配置注册与持久化，配置改动后可自动重载并应用运行时。
 
 > 已移除：Tool/Middleware/Trigger 的细粒度手动开关 API。
@@ -158,12 +158,22 @@ EXTRA:json:扩展参数={"mode":"fast"}
 }
 ```
 
-### 热重载与心跳
+### 手动重载与心跳
+
+- `POST /faust/admin/plugins/reload`
 
 - `GET /faust/admin/plugins/hot-reload`
 - `POST /faust/admin/plugins/hot-reload/start`
 - `POST /faust/admin/plugins/hot-reload/stop`
 - `POST /faust/admin/plugins/heartbeat`
+
+> 说明：当前默认采用**手动重载**流程；`/hot-reload/*` 接口保留兼容响应，不再启用自动轮询重载。
+
+### 本地 ZIP 安装 / 打包 / 删除
+
+- `POST /faust/admin/plugins/install-zip`
+- `POST /faust/admin/plugins/package-zip`
+- `DELETE /faust/admin/plugins/{plugin_id}`
 
 ## 8. Runtime 重建行为
 

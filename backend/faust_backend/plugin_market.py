@@ -233,3 +233,134 @@ def install_plugin_from_catalog(
             **download_meta,
         },
     }
+
+
+def install_plugin_from_zip(
+    *,
+    zip_path: str,
+    plugins_dir: Path,
+    overwrite: bool = False,
+    expected_plugin_id: str | None = None,
+) -> dict[str, Any]:
+    src_zip = Path(str(zip_path or "").strip())
+    if not src_zip.exists() or not src_zip.is_file():
+        raise PluginMarketError(f"ZIP 文件不存在: {src_zip}")
+
+    plugins_dir = Path(plugins_dir)
+    plugins_dir.mkdir(parents=True, exist_ok=True)
+
+    expected_id = str(expected_plugin_id or "").strip()
+    if expected_id and not _SAFE_PLUGIN_ID.match(expected_id):
+        raise PluginMarketError(f"非法插件 ID: {expected_id}")
+
+    with tempfile.TemporaryDirectory(prefix="faust-plugin-local-") as td:
+        extract_dir = Path(td) / "extract"
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            with zipfile.ZipFile(src_zip, "r") as zf:
+                zf.extractall(extract_dir)
+        except zipfile.BadZipFile as exc:
+            raise PluginMarketError("本地 ZIP 不是有效压缩包") from exc
+
+        plugin_root = _find_plugin_root(extract_dir, expected_id or "")
+        manifest_file = plugin_root / "plugin.json"
+        if not manifest_file.exists():
+            raise PluginMarketError("插件包缺少 plugin.json")
+
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+        plugin_id = str(manifest.get("id") or plugin_root.name).strip()
+        if not _SAFE_PLUGIN_ID.match(plugin_id):
+            raise PluginMarketError(f"插件包中的 ID 非法: {plugin_id}")
+        if expected_id and plugin_id != expected_id:
+            raise PluginMarketError(f"插件 ID 不匹配: 期望 {expected_id}, 实际 {plugin_id}")
+
+        target_dir = plugins_dir / plugin_id
+        if target_dir.exists() and not overwrite:
+            raise PluginAlreadyInstalledError(f"插件 {plugin_id} 已安装，需确认覆盖后才能继续")
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+        shutil.copytree(plugin_root, target_dir)
+
+    return {
+        "plugin_id": plugin_id,
+        "install_dir": str(target_dir),
+        "source": {
+            "type": "local_zip",
+            "zip_path": str(src_zip.resolve()),
+        },
+    }
+
+
+def package_plugin_to_zip(
+    *,
+    plugin_id: str,
+    plugins_dir: Path,
+    output_dir: Path | None = None,
+    zip_name: str | None = None,
+) -> dict[str, Any]:
+    pid = str(plugin_id or "").strip()
+    if not _SAFE_PLUGIN_ID.match(pid):
+        raise PluginMarketError(f"非法插件 ID: {pid}")
+
+    plugins_dir = Path(plugins_dir)
+    plugin_dir = plugins_dir / pid
+    if not plugin_dir.exists() or not plugin_dir.is_dir():
+        raise PluginMarketError(f"插件不存在: {pid}")
+    if not (plugin_dir / "plugin.json").exists():
+        raise PluginMarketError(f"插件 {pid} 缺少 plugin.json")
+
+    out_dir = Path(output_dir) if output_dir else plugins_dir / "_dist"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_name = str(zip_name or f"{pid}.zip").strip() or f"{pid}.zip"
+    if not out_name.lower().endswith(".zip"):
+        out_name += ".zip"
+    zip_file = out_dir / out_name
+
+    with zipfile.ZipFile(zip_file, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for p in plugin_dir.rglob("*"):
+            if p.is_dir():
+                continue
+            if "__pycache__" in p.parts:
+                continue
+            rel = p.relative_to(plugin_dir)
+            arc = Path(pid) / rel
+            zf.write(p, str(arc).replace("\\", "/"))
+
+    return {
+        "plugin_id": pid,
+        "zip_path": str(zip_file.resolve()),
+        "output_dir": str(out_dir.resolve()),
+    }
+
+
+def delete_installed_plugin(*, plugin_id: str, plugins_dir: Path, state_file: Path | None = None) -> dict[str, Any]:
+    pid = str(plugin_id or "").strip()
+    if not _SAFE_PLUGIN_ID.match(pid):
+        raise PluginMarketError(f"非法插件 ID: {pid}")
+
+    plugins_dir = Path(plugins_dir)
+    target_dir = plugins_dir / pid
+    if not target_dir.exists() or not target_dir.is_dir():
+        raise PluginMarketError(f"插件不存在: {pid}")
+
+    shutil.rmtree(target_dir)
+
+    sf = Path(state_file) if state_file else plugins_dir / "plugins.state.json"
+    if sf.exists():
+        try:
+            raw = json.loads(sf.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                plugins_state = raw.get("plugins")
+                if isinstance(plugins_state, dict):
+                    plugins_state.pop(pid, None)
+                configs_state = raw.get("configs")
+                if isinstance(configs_state, dict):
+                    configs_state.pop(pid, None)
+                sf.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    return {
+        "plugin_id": pid,
+        "deleted_dir": str(target_dir),
+    }

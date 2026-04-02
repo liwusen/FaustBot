@@ -96,7 +96,7 @@
         }
       ],
       "values": {
-        "TRIGGER_USER_KEEP": 3,
+        "TRIGGER_USER_KEEP": 4,
         "NORMAL_USER_KEEP": 50
       }
     },
