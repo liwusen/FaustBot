@@ -29,7 +29,6 @@ import time
 import uuid
 from pathlib import Path
 import faust_backend.utils as utils
-clipboard=utils.CrossPlatformClipboard()
 toollist=[]
 DIARY_DIR=Path("agents") / Path(conf.AGENT_NAME) / "diary" 
 STARTED=False
@@ -413,21 +412,27 @@ def pythonExecTool(code: str) -> str:
 @add_to_tool_list
 @tool
 @record_func_name
-def sysExecTool(command: str) -> str:
+def sysExecTool(command: str,timeout:int=15) -> str:
     """
     Description:
         执行传入的系统命令，并返回命令的输出结果或错误信息。
         这个工具只应该在用户需要时执行。
     Args:
         command (str): 需要执行的系统命令字符串。
+        timeout (int): 超时时间
     Returns:
         str: 命令的输出结果字符串，或者错误信息。
     """
     try:
         print("[llm_tools.sysExecTool] Executing command:", command)
-        with os.popen(command) as f:
-            output = f.read()
-        return output if output else "命令执行成功，但没有输出。"
+        subp=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,encoding='utf-8')
+        subp.wait(timeout)
+        stdout,stderr=subp.communicate()
+        stdout=stdout.decode(errors='ignore').strip()
+        stderr=stderr.decode(errors='ignore').strip()
+        return f"""执行完成。标准输出:\n{stdout}\n标准错误:\n{stderr}\n返回值{subp.returncode}"""
+    except subprocess.TimeoutExpired as e:
+        return f"命令超时"
     except Exception as e:
         return f"命令执行出错: {str(e)}"
 @add_to_tool_list
@@ -496,7 +501,19 @@ def writeDiaryFileTool(content: str) -> str:
         return f"日记文件写入成功，文件名为: {filename}"
     except Exception as e:
         return f"写入日记文件出错: {str(e)}"
+@add_to_tool_list
+@tool
+@record_func_name
+def getCwdTool()->str:
+    """获取当前工作目录
 
+    Returns:
+        str: 当前工作目录
+    """    
+    try:
+        return os.getcwd()
+    except Exception as e:
+        return f"出错{str(e)}"
 @add_to_tool_list
 @tool
 @record_func_name

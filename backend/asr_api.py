@@ -95,21 +95,6 @@ model_state = {
     "asr_model": None,
     "punc_model": None
 }
-
-
-def download_vad_models():
-    """下载asr的vad"""
-    vad_dir = os.getcwd()
-
-    target_dir = os.path.join(vad_dir, 'model', 'torch_hub')
-    os.makedirs(target_dir, exist_ok=True)
-
-    model_dir = snapshot_download('morelle/my-neuro-vad', local_dir=target_dir)
-
-    print(f'已将asr vad下载到{model_dir}')
-
-
-# 使用 FastAPI 的生命周期事件装饰器
 @app.on_event("startup")
 async def startup_event():
     print("正在加载模型...")
@@ -118,26 +103,15 @@ async def startup_event():
     torch_hub_dir = os.path.join(MODEL_DIR, "torch_hub")
     local_vad_path = os.path.join(torch_hub_dir, "snakers4_silero-vad_master")
 
-    # 如果VAD模型目录不存在，则下载
-    if not os.path.exists(local_vad_path):
-        print("未找到VAD模型目录，开始下载...")
-        download_vad_models()
-    else:
-        print("VAD模型目录已存在，跳过下载步骤")
-
-    # 加载VAD模型（严格本地模式，避免torch.hub解析路径）
     try:
         print("正在从本地加载VAD模型...")
-        # 关键：通过`source='local'`强制使用本地模式，避免torch.hub解析repo_or_dir为远程仓库
         model_state["vad_model"] = torch.hub.load(
-            repo_or_dir=local_vad_path,
+            repo_or_dir='snakers4/silero-vad',
             model='silero_vad',
             force_reload=False,
-            onnx=True,
             trust_repo=True,
-            source='local'  # 添加这一行，强制本地加载模式
+            onnx=True
         )
-
         # 解包模型（silero-vad的torch.hub.load返回元组 (model, example)）
         vad_model_tuple = model_state["vad_model"]
         model_state["vad_model"] = vad_model_tuple[0]  # 提取第一个元素（模型本体）
@@ -178,7 +152,6 @@ async def startup_event():
         model_type="pytorch",
         dtype="float32"
     )
-
     # 恢复原始环境变量
     if original_modelscope_cache:
         os.environ['MODELSCOPE_CACHE'] = original_modelscope_cache

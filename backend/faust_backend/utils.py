@@ -2,6 +2,8 @@ import functools
 import inspect
 import subprocess
 import sys
+import logging
+import uvicorn
 def show_return_wrapper(func):
     @functools.wraps(func)
     async def wrapper(*args, **kwargs):
@@ -60,3 +62,5 @@ class CrossPlatformClipboard:
                 result = subprocess.run(['xsel', '--clipboard', '--output'], 
                                       capture_output=True, text=True)
                 return result.stdout
+
+logger=logging.getLogger("uvicorn")
