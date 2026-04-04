@@ -40,6 +40,10 @@ record/
 
 *.zip
 
-*/rag*.json*
 
-*/triggers.json
+
+#data files
+rag_chat_history_records.json
+rag_doc_tracker.json
+triggers.json
+skill.d/

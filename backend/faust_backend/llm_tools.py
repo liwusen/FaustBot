@@ -11,6 +11,10 @@ import socket
 import io
 import datetime
 import re
+import tempfile
+import zipfile
+import shutil
+import requests
 import faust_backend.gui_llm_lib as gui_llm_lib
 import faust_backend.trigger_manager as trigger_manager
 import faust_backend.nimble as nimble
@@ -157,6 +161,89 @@ def _apply_patch_text(patch_text: str) -> str:
             raise ValueError(f"不支持的 patch 动作: {action}")
 
     return "Patch 应用成功:\n" + "\n".join(changed)
+
+
+def _find_skill_root(extract_dir: Path) -> Path:
+    candidates = [p.parent for p in extract_dir.rglob("_meta.json") if p.is_file()]
+    if not candidates:
+        raise ValueError("skill 包中未找到 _meta.json")
+    if len(candidates) == 1:
+        return candidates[0]
+    for c in candidates:
+        if (c / "SKILL.md").exists():
+            return c
+    return candidates[0]
+
+
+def _install_skill_from_slug(slug: str, overwrite: bool = False) -> dict:
+    api = f"https://wry-manatee-359.convex.site/api/v1/download?slug={requests.utils.quote(slug, safe='')}"
+    with tempfile.TemporaryDirectory(prefix="faust-skill-") as td:
+        td_path = Path(td)
+        zip_path = td_path / "skill.zip"
+        extract_dir = td_path / "extract"
+        extract_dir.mkdir(parents=True, exist_ok=True)
+
+        resp = requests.get(api, timeout=60)
+        resp.raise_for_status()
+        zip_path.write_bytes(resp.content)
+
+        try:
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                zf.extractall(extract_dir)
+        except zipfile.BadZipFile as exc:
+            raise ValueError("下载结果不是有效 ZIP") from exc
+
+        skill_root = _find_skill_root(extract_dir)
+        meta_file = skill_root / "_meta.json"
+        skill_doc = skill_root / "SKILL.md"
+        if not skill_doc.exists():
+            raise ValueError("skill 包缺少 SKILL.md")
+
+        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        skill_slug = str(meta.get("slug") or slug).strip()
+        version = str(meta.get("version") or "0.0.0").strip()
+        if not skill_slug:
+            raise ValueError("skill slug 为空")
+
+        agent_name = str(conf.AGENT_NAME)
+        skill_dir = Path("agents") / agent_name / "skill.d"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        target_dir = skill_dir / skill_slug
+
+        if target_dir.exists() and not overwrite:
+            raise ValueError(f"skill 已存在: {skill_slug}，如需覆盖请设置 overwrite=true")
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+        shutil.copytree(skill_root, target_dir)
+
+        index_file = skill_dir / "skills.state.json"
+        state = {"skills": {}}
+        if index_file.exists():
+            try:
+                state = json.loads(index_file.read_text(encoding="utf-8"))
+                if not isinstance(state, dict):
+                    state = {"skills": {}}
+            except Exception:
+                state = {"skills": {}}
+
+        skills = state.setdefault("skills", {})
+        skills[skill_slug] = {
+            "slug": skill_slug,
+            "version": version,
+            "installed_at": datetime.datetime.now().isoformat(),
+            "enabled": True,
+            "source": api,
+            "path": str(target_dir.resolve()),
+        }
+        index_file.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        return {
+            "slug": skill_slug,
+            "version": version,
+            "agent": agent_name,
+            "path": str(target_dir.resolve()),
+            "source": api,
+        }
 #define add to TOOLLIST wrapper
 def __init__():
     print("[llm_tools] Initializing llm_tools module...")
@@ -1102,6 +1189,54 @@ def minecraftDisconnectTool(reason: str = "disconnect requested") -> str:
         return json.dumps(result, ensure_ascii=False)
     except Exception as e:
         return json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
+
+
+@add_to_tool_list
+@tool
+@record_func_name
+async def installOpenClawSkillTool(slug: str, overwrite: bool = False) -> str:
+    """
+    Description:
+        安装一个 OpenClaw Skill 到当前 Agent 的独立目录 agents/<agent>/skill.d/<slug>。
+        安装前会触发前端 HIL 确认框，用户批准后才会真正下载与安装。
+        下载 API:
+        https://wry-manatee-359.convex.site/api/v1/download?slug=<NAME>
+
+        Skill ZIP 结构要求：
+        - _meta.json
+        - SKILL.md
+        - 其他文件
+    Args:
+        slug (str): skill 名称（slug）。
+        overwrite (bool): 若已存在是否覆盖安装。
+    Returns:
+        str: 安装结果说明。
+    """
+    if not STARTED:
+        return "系统尚未完全启动，无法安装 skill。"
+
+    slug = str(slug or "").strip()
+    if not slug:
+        return "安装失败：slug 不能为空。"
+
+    approved, reason = await HILRequest(
+        id=f"skill_install_{uuid.uuid4().hex}",
+        title=f"允许安装 Skill: {slug} ?",
+        summary=(
+            f"Agent 请求安装 Skill：{slug}\n"
+            f"目标目录: agents/{conf.AGENT_NAME}/skill.d/{slug}\n"
+            f"来源: https://wry-manatee-359.convex.site/api/v1/download?slug={slug}\n"
+            f"overwrite={bool(overwrite)}"
+        ),
+    )
+    if not approved:
+        return f"用户拒绝安装 Skill，slug={slug}，原因={reason}"
+
+    try:
+        result = await asyncio.to_thread(_install_skill_from_slug, slug, overwrite)
+        return f"Skill 安装成功: {json.dumps(result, ensure_ascii=False)}"
+    except Exception as e:
+        return f"Skill 安装失败: {str(e)}"
 
 if __name__ == "__main__":
     for tool in toollist:

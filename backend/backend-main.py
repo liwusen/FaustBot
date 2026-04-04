@@ -27,6 +27,7 @@ import faust_backend.admin_runtime as admin_runtime
 import faust_backend.service_manager as service_manager
 import faust_backend.rag_client as rag_client
 import faust_backend.plugin_market as plugin_market
+import faust_backend.skill_manager as skill_manager
 from faust_backend.plugin_system import PluginManager
 import tqdm
 from os.path import join as pjoin
@@ -275,7 +276,8 @@ async def startup_event():
     if NOT_INITIALIZED:
         await invoke_agent_locked(agent,{"messages":[{"role":"system","content":PROMPT}]})
     else:
-        await invoke_agent_locked(agent,{"messages":[{"role":"user","content":"请继续按当前角色设定工作。\n 如果你需要重新了解你的角色设定，请读取agents/{AGENT_NAME}/AGENT.md、ROLE.md、COREMEMORY.md、TASK.md等文件来获取最新的设定内容。\n 这一条对话无需写入日记"}]})
+        if not conf.args.no_startup_chat:
+            await invoke_agent_locked(agent,{"messages":[{"role":"user","content":"请继续按当前角色设定工作。\n 如果你需要重新了解你的角色设定，请读取agents/{AGENT_NAME}/AGENT.md、ROLE.md、COREMEMORY.md、TASK.md等文件来获取最新的设定内容。\n 这一条对话无需写入日记"}]})
     try:
         await admin_runtime.align_rag_agent(AGENT_NAME)
     except Exception as e:
@@ -441,6 +443,87 @@ async def admin_switch_agent(payload: dict):
 @app.get("/faust/admin/live2d/models")
 async def admin_list_live2d_models():
     return {"items": admin_runtime.list_available_models()}
+
+
+@app.get("/faust/admin/skills")
+async def admin_list_skills(agent_name: str | None = None):
+    try:
+        items = skill_manager.list_skills(agent_name=agent_name)
+        return {"status": "ok", "agent": agent_name or AGENT_NAME, "items": items}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Skill 列表读取失败: {e}")
+
+
+@app.get("/faust/admin/skills/{slug}")
+async def admin_get_skill_detail(slug: str, agent_name: str | None = None):
+    try:
+        detail = skill_manager.get_skill_detail(slug, agent_name=agent_name)
+        return {"status": "ok", "agent": agent_name or AGENT_NAME, "detail": detail}
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Skill 详情读取失败: {e}")
+
+
+@app.post("/faust/admin/skills/install")
+async def admin_install_skill(payload: dict | None = None):
+    body = payload or {}
+    slug = str(body.get("slug") or "").strip()
+    agent_name = body.get("agent_name")
+    overwrite = bool(body.get("overwrite", False))
+    if not slug:
+        raise HTTPException(status_code=400, detail="缺少 slug")
+    try:
+        item = skill_manager.install_skill(slug, agent_name=agent_name, overwrite=overwrite)
+        return {"status": "ok", "item": item}
+    except skill_manager.SkillAlreadyInstalledError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Skill 安装失败: {e}")
+
+
+@app.post("/faust/admin/skills/install-zip")
+async def admin_install_skill_from_zip(payload: dict | None = None):
+    body = payload or {}
+    zip_path = str(body.get("zip_path") or "").strip()
+    agent_name = body.get("agent_name")
+    overwrite = bool(body.get("overwrite", False))
+    if not zip_path:
+        raise HTTPException(status_code=400, detail="缺少 zip_path")
+    try:
+        item = skill_manager.install_skill_from_zip(zip_path, agent_name=agent_name, overwrite=overwrite)
+        return {"status": "ok", "item": item}
+    except skill_manager.SkillAlreadyInstalledError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Skill ZIP 安装失败: {e}")
+
+
+@app.delete("/faust/admin/skills/{slug}")
+async def admin_delete_skill(slug: str, agent_name: str | None = None):
+    try:
+        result = skill_manager.remove_skill(slug, agent_name=agent_name)
+        return {"status": "ok", "deleted": result}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Skill 删除失败: {e}")
+
+
+@app.post("/faust/admin/skills/{slug}/enable")
+async def admin_enable_skill(slug: str, payload: dict | None = None):
+    agent_name = (payload or {}).get("agent_name")
+    try:
+        result = skill_manager.set_skill_enabled(slug, True, agent_name=agent_name)
+        return {"status": "ok", "item": result}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Skill 启用失败: {e}")
+
+
+@app.post("/faust/admin/skills/{slug}/disable")
+async def admin_disable_skill(slug: str, payload: dict | None = None):
+    agent_name = (payload or {}).get("agent_name")
+    try:
+        result = skill_manager.set_skill_enabled(slug, False, agent_name=agent_name)
+        return {"status": "ok", "item": result}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Skill 禁用失败: {e}")
 
 
 @app.get("/faust/admin/triggers")
@@ -949,6 +1032,8 @@ async def command_websocket(websocket: WebSocket):
                 resp = await invoke_agent_locked(agent,{"messages":[{"role":"user","content":trigger_text}]})
                 reply = resp["messages"][-1].content
                 print('[main] Trigger activated reply', reply)
+                if("<NO_TTS_OUTPUT>" in reply):
+                    continue
                 await websocket.send_text(f"SAY {reply}")
             if not forward_queue.empty():
                 command=forward_queue.get()

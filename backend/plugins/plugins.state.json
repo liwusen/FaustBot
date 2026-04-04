@@ -97,7 +97,7 @@
       ],
       "values": {
         "TRIGGER_USER_KEEP": 4,
-        "NORMAL_USER_KEEP": 50
+        "NORMAL_USER_KEEP": 30
       }
     },
     "ui_operator": {
@@ -160,7 +160,7 @@
           "ch_sim",
           "en"
         ],
-        "OCR_GPU": true,
+        "OCR_GPU": false,
         "OCR_MIN_CONF": 0.3,
         "PYAUTOGUI_PAUSE": 0.1,
         "PYAUTOGUI_FAILSAFE": true,

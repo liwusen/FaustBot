@@ -3,12 +3,31 @@ import os.path
 from fnmatch import fnmatch
 import asyncio
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage,SystemMessage
+from langchain.tools import tool
 import json,re
-import faust_backend.config_loader as conf
+try:
+    import faust_backend.config_loader as conf
+    import faust_backend.backend2front as backend2front
+    from faust_backend.llm_tools import HILRequest
+except ImportError:
+    import config_loader as conf
+@tool
+async def listdir(path):
+    """
+    列出目录内容
+    Args:
+        path (str): 目录路径
+    Returns:
+        list: 目录下的文件和子目录列表，或错误信息字符串
+    """
+    try:
+        return os.listdir(path)
+    except Exception as e:
+        return f"Error: {str(e)}"
 checker_agent=ChatOpenAI(model=conf.SECURITY_VERIFIER_LLM_MODEL,
                          base_url=conf.SECURITY_VERIFIER_LLM_API_ENDPOINT,
-                         api_key=conf.SERCURITY_VERIFIER_LLM_KEY,
+                         api_key=conf.SECURITY_VERIFIER_LLM_KEY,
                          )
 def setSecurityLevel(level):
     """设置安全级别
@@ -75,40 +94,25 @@ async def check_access(path, operation):
             elif access == 'full-no-rm' and operation != 'delete':
                 print(f"安全检查: 路径={path}, 操作={operation}, 访问级别={access} -> 允许")
                 return True
-    # 需要人工审批，调用子LLM进行审核
-    try:
-        if os.path.isdir(path):
-            dirlist=os.listdir(path)
-            dirlist_str="目录子内容列表"+"\n".join(dirlist)
-        else:
-            dirlist_str=""
-        approval = await checker_agent.ainvoke([
-            HumanMessage(
-                content=f"""
-                请审核以下操作是否安全：
-                路径={path}, 操作={operation}。请只回复 approve 或 reject。注意，你只对操作的安全性进行判断，不要考虑其他因素。
-                不安全的操作包括但不限于：
-                - 对敏感文件（密码，Token）的访问
-                - 大规模删除或修改操作
-                - 其他可能导致系统不稳定或数据泄露的操作
-                安全的操作包括但不限于：
-                - 读取公共文件
-                - 对非敏感文件的修改
-                - 删除指定的少量文件
-                - 其他对系统影响较小的操作
-                请根据以上原则进行判断，并回复 approve 或 reject。
-                {dirlist_str}
-                """
-            )
-        ])
-        decision = (approval.content or "").strip().lower()
-        print(f"安全检查: 路径={path}, 操作={operation}, 访问级别=none -> 需要人工审批，模型返回={decision}")
-        return decision == 'approve'
-    except Exception as e:
-        print(f"安全检查: 路径={path}, 操作={operation}, 访问级别=none -> 审批失败，默认拒绝。错误={e}")
-        return False
+async def quick_check_command(command:str):
+    """快速检查命令是否完全安全"""
+    l=str.lower(command)
+    spliters=["&&","||",";"]
+    for sp in spliters:
+        l=l.replace(sp," ")
+    tokens=l.split()
+    safe_keywords=["ls","cat","echo","head","tail","grep","find","mkdir","cp","mv"]
+    if os.name == "nt":
+        safe_keywords += ["dir","type","netstat","tasklist","whoami"]
+        safe_keywords +=["Get-ComputerInfo","Get-Process","Get-Service","Get-CimInstance","Get-ChildItem","Get-Content","Get-FileHash","Get-Item","Get-ItemProperty","Get-NetIPAddress","Test-Connection","Resolve-DnsName","Get-NetTCPConnection","Get-Date","Get-ExecutionPolicy","Get-PSDrive","Get-Variable","Get-HotFix","Get-LocalUser","Get-LocalGroup"]
+    for token in tokens:
+        if token not in safe_keywords and not token.startswith(("/", "./", "../")):
+            print(f"快速检查: 命令='{command}' -> 可能包含不安全的操作，建议进行详细审核")
+            return False
+    return True
 async def extract_command_information(command:str):
     """从命令中提取路径和操作信息，供安全检查使用"""
+
     prompt="""
     你是一个安全检查助手.
     请从以下命令中提取路径和操作信息，并进行安全检查，供安全检查使用。命令格式可能多样，请尽量准确解析出路径和操作类型。
@@ -116,7 +120,6 @@ async def extract_command_information(command:str):
     - 大规模删除文件：rm -rf .
     - 读取敏感文件：cat ./TOKEN.txt
     - 修改敏感文件：echo "new_token" > ./TOKEN.txt
-    - 修改系统设置：sysctl -w key=value
     安全的命令:
     - 正常文件操作(增删查改)
     - 写入正常的文件
@@ -129,8 +132,8 @@ async def extract_command_information(command:str):
     - 修改系统设置
     - 其他可能存在风险且容易造成较大影响的操作
     如果你认为某个操作可能存在安全风险，但不确定是否危险，可以回复 human_approval_needed，表示需要人工审批.
-    同时,你需要同意所有安全的命令，并拒绝所有危险的命令。
-    如果你确实无法判断命令的安全性，可以回复 human_approval_needed，表示需要人工审批。
+    同时,你需要同意所有完全安全的命令，并拒绝所有**极度**危险的命令。
+    [重要]如果你确实无法判断命令的安全性，可以回复 human_approval_needed，表示需要人工审批。
     命令示例：
     1. 删除文件：rm -rf /path/to/file
     返回格式（JSON序列化）:
@@ -167,7 +170,7 @@ async def extract_command_information(command:str):
     指令正文
     指令:"""+command
     result = await checker_agent.ainvoke([
-        HumanMessage(content=prompt)
+        SystemMessage(content=prompt)
     ])
     raw_content = result.content if isinstance(result.content, str) else json.dumps(result.content, ensure_ascii=False)
     cleaned = raw_content.strip()
@@ -176,7 +179,7 @@ async def extract_command_information(command:str):
         cleaned = fenced.group(1).strip()
 
     result_json=json.loads(cleaned)
-    print(f"从命令中提取的信息: {result_json}")
+    print(f"[security]从命令中提取的信息: {result_json}")
     accept = str(result_json.get("accept", "reject")).strip().lower()
     paths = result_json.get("paths", [])
     normalized_paths = []
@@ -189,10 +192,40 @@ async def extract_command_information(command:str):
         operations = [op.strip().lower() for op in re.split(r"[,，]", raw_operation) if op.strip()]
         normalized_paths.append({
             "path": raw_path,
-            "operation": operations if len(operations) > 1 else (operations[0] if operations else "")
+            "operation": (operations if len(operations) > 1 else (operations[0] if operations else "")).lower()
         })
         reason=result_json.get("reason", "")
     return accept, normalized_paths, reason
+async def security_check_command(command:str)->bool:
+    """
+    检查命令的安全性，并根据提取的信息进行访问权限检查
+
+    Args:
+        command (str): 要检查的命令
+    Returns:
+        bool: 是否允许执行该命令
+    """
+    if await quick_check_command(command):
+        print(f"[security]安全检查: 命令='{command}' -> 快速检查通过，允许执行")
+        return True
+    accept, paths, reason = await extract_command_information(command)
+    if accept == "approve":
+        for path_info in paths:
+            path = path_info.get("path", "")
+            operation = path_info.get("operation", "")
+            if not await check_access(path, operation):
+                print(f"[security]安全检查: 命令='{command}' -> 访问被拒绝，路径='{path}', 操作='{operation}'")
+                return False
+        return True
+    elif accept == "reject":
+        return False
+    elif accept == "human_approval_needed":
+        res,_=await HILRequest("安全检查", f"命令: {command} 需要人工审批",f"{command}\nReason: {reason}\nNeeds human approval")
+        if res=="approved":
+            return True
+        else:
+            return False
+    return False
 async def demo():
     print(fnmatch("agents/agent1/AGENT.md", "*/agents/*/AGENT.md"))  
     setSecurityLevel("standard")

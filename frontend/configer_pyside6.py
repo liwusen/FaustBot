@@ -195,6 +195,11 @@ class ConfigerWindow(QMainWindow):
                 "items": [],
                 "selected_id": None,
             },
+            "skills": {
+                "items": [],
+                "selected_slug": None,
+                "selected_agent": None,
+            },
         }
 
         self.public_fields: Dict[str, FieldWidget] = {}
@@ -254,6 +259,7 @@ class ConfigerWindow(QMainWindow):
         self._build_rag_tab()
         self._build_runtime_tab()
         self._build_trigger_tab()
+        self._build_skills_tab()
         self._build_plugins_tab()
 
         status = QStatusBar()
@@ -468,6 +474,72 @@ class ConfigerWindow(QMainWindow):
 
         layout.addWidget(split, 1)
         self.tabs.addTab(tab, "插件管理")
+
+    def _build_skills_tab(self):
+        tab = QWidget()
+        layout = QHBoxLayout(tab)
+
+        left = QVBoxLayout()
+
+        agent_row = QHBoxLayout()
+        self.skill_agent_combo = QComboBox()
+        self.skill_agent_combo.currentTextChanged.connect(self.load_skills)
+        agent_row.addWidget(QLabel("Agent"))
+        agent_row.addWidget(self.skill_agent_combo, 1)
+        left.addLayout(agent_row)
+
+        self.skill_list = QListWidget()
+        self.skill_list.itemSelectionChanged.connect(self._on_skill_selected)
+        left.addWidget(QLabel("Skill 列表"))
+        left.addWidget(self.skill_list, 1)
+
+        btn_row = QHBoxLayout()
+        self.skill_refresh_btn = QPushButton("刷新")
+        self.skill_install_btn = QPushButton("安装")
+        self.skill_install_zip_btn = QPushButton("从 ZIP 安装")
+        self.skill_open_dir_btn = QPushButton("打开目录")
+        self.skill_enable_btn = QPushButton("启用")
+        self.skill_disable_btn = QPushButton("禁用")
+        self.skill_delete_btn = QPushButton("删除")
+        btn_row.addWidget(self.skill_refresh_btn)
+        btn_row.addWidget(self.skill_install_btn)
+        btn_row.addWidget(self.skill_install_zip_btn)
+        btn_row.addWidget(self.skill_open_dir_btn)
+        btn_row.addWidget(self.skill_enable_btn)
+        btn_row.addWidget(self.skill_disable_btn)
+        btn_row.addWidget(self.skill_delete_btn)
+        left.addLayout(btn_row)
+
+        self.skill_refresh_btn.clicked.connect(self.load_skills)
+        self.skill_install_btn.clicked.connect(self.install_skill)
+        self.skill_install_zip_btn.clicked.connect(self.install_skill_from_zip)
+        self.skill_open_dir_btn.clicked.connect(self.open_skill_directory)
+        self.skill_enable_btn.clicked.connect(lambda: self.set_skill_enabled(True))
+        self.skill_disable_btn.clicked.connect(lambda: self.set_skill_enabled(False))
+        self.skill_delete_btn.clicked.connect(self.delete_skill)
+
+        right = QVBoxLayout()
+        self.skill_meta_view = QPlainTextEdit()
+        self.skill_meta_view.setReadOnly(True)
+        right.addWidget(QLabel("Skill 详情"))
+        right.addWidget(self.skill_meta_view, 2)
+
+        self.skill_doc_view = QPlainTextEdit()
+        self.skill_doc_view.setReadOnly(True)
+        right.addWidget(QLabel("SKILL.md"))
+        right.addWidget(self.skill_doc_view, 3)
+
+        split = QSplitter(Qt.Horizontal)
+        left_holder = QWidget()
+        left_holder.setLayout(left)
+        right_holder = QWidget()
+        right_holder.setLayout(right)
+        split.addWidget(left_holder)
+        split.addWidget(right_holder)
+        split.setSizes([420, 880])
+
+        layout.addWidget(split, 1)
+        self.tabs.addTab(tab, "Skill 管理")
 
     def _build_trigger_tab(self):
         tab = QWidget()
@@ -725,6 +797,22 @@ class ConfigerWindow(QMainWindow):
             marker = "（当前）" if agent.get("is_current") else ""
             self.agent_list.addItem(f"{agent.get('name', '-')}{marker}")
 
+        if hasattr(self, "skill_agent_combo"):
+            selected = self.state["skills"].get("selected_agent")
+            current_agent = runtime.get("current_agent")
+            self.skill_agent_combo.blockSignals(True)
+            self.skill_agent_combo.clear()
+            for agent in runtime.get("agents", []) or []:
+                name = str(agent.get("name") or "").strip()
+                if name:
+                    self.skill_agent_combo.addItem(name)
+            target = selected or current_agent
+            if target:
+                idx = self.skill_agent_combo.findText(target)
+                if idx >= 0:
+                    self.skill_agent_combo.setCurrentIndex(idx)
+            self.skill_agent_combo.blockSignals(False)
+
     def load_services(self):
         data = self.api_request("GET", "/faust/admin/services")
         self.state["services"] = data.get("items") or []
@@ -968,6 +1056,232 @@ class ConfigerWindow(QMainWindow):
         except Exception as e:
             self.fail("插件打包失败", e)
 
+    def _current_skill_agent(self) -> Optional[str]:
+        if not hasattr(self, "skill_agent_combo"):
+            return None
+        text = self.skill_agent_combo.currentText().strip()
+        return text or None
+
+    def load_skills(self):
+        agent_name = self._current_skill_agent() or self.state["runtime"].get("current_agent")
+        if not agent_name:
+            return
+        previous_agent = self.state["skills"].get("selected_agent")
+        if previous_agent and previous_agent != agent_name:
+            self.state["skills"]["selected_slug"] = None
+        self.state["skills"]["selected_agent"] = agent_name
+        data = self.api_request("GET", "/faust/admin/skills", params={"agent_name": agent_name})
+        items = data.get("items") or []
+        self.state["skills"]["items"] = items
+
+        selected_slug = self.state["skills"].get("selected_slug")
+        self.skill_list.blockSignals(True)
+        self.skill_list.clear()
+        row_to_select = -1
+        for idx, sk in enumerate(items):
+            slug = str(sk.get("slug") or "")
+            enabled = bool(sk.get("enabled", True))
+            ver = str(sk.get("version") or "-")
+            missing = bool(sk.get("missing"))
+            prefix = "MISSING" if missing else ("ON" if enabled else "OFF")
+            item = QListWidgetItem(f"[{prefix}] {slug}  v{ver}")
+            item.setData(Qt.UserRole, slug)
+            self.skill_list.addItem(item)
+            if selected_slug and selected_slug == slug:
+                row_to_select = idx
+
+        if row_to_select >= 0:
+            self.skill_list.setCurrentRow(row_to_select)
+        elif self.skill_list.count() > 0:
+            self.skill_list.setCurrentRow(0)
+            cur = self.skill_list.currentItem()
+            self.state["skills"]["selected_slug"] = str(cur.data(Qt.UserRole)) if cur else None
+        else:
+            self.state["skills"]["selected_slug"] = None
+            self.skill_meta_view.setPlainText("")
+            self.skill_doc_view.setPlainText("")
+        self.skill_list.blockSignals(False)
+        if self.skill_list.count() > 0:
+            self._on_skill_selected()
+
+    def _selected_skill_slug(self) -> Optional[str]:
+        item = self.skill_list.currentItem()
+        if not item:
+            return None
+        slug = item.data(Qt.UserRole)
+        return str(slug) if slug else None
+
+    def _on_skill_selected(self):
+        slug = self._selected_skill_slug()
+        self.state["skills"]["selected_slug"] = slug
+        items = self.state["skills"].get("items") or []
+        by_slug = {str(it.get("slug") or ""): it for it in items}
+        if not slug or slug not in by_slug:
+            self.skill_meta_view.setPlainText("")
+            self.skill_doc_view.setPlainText("")
+            return
+
+        selected = by_slug.get(slug) or {}
+        if bool(selected.get("missing")):
+            self.skill_meta_view.setPlainText(
+                "\n".join(
+                    [
+                        f"Slug: {slug}",
+                        "状态: 目录缺失（仅存在于 skills.state.json）",
+                        f"Path: {selected.get('path') or '-'}",
+                        "",
+                        "请删除该条目或重新安装该 Skill。",
+                    ]
+                )
+            )
+            self.skill_doc_view.setPlainText("")
+            return
+
+        agent_name = self._current_skill_agent() or self.state["runtime"].get("current_agent")
+        if not agent_name:
+            return
+        try:
+            data = self.api_request(
+                "GET",
+                f"/faust/admin/skills/{requests.utils.quote(slug, safe='')}",
+                params={"agent_name": agent_name},
+            )
+            detail = data.get("detail") or {}
+            meta = detail.get("meta") or {}
+            lines = [
+                f"Slug: {detail.get('slug', slug)}",
+                f"Version: {meta.get('version') or '-'}",
+                f"Enabled: {bool(detail.get('enabled', True))}",
+                f"Installed At: {detail.get('installed_at') or '-'}",
+                f"Source: {detail.get('source') or '-'}",
+                f"Path: {detail.get('path') or '-'}",
+                "",
+                "Meta:",
+                json.dumps(meta, ensure_ascii=False, indent=2),
+                "",
+                "Files:",
+                "\n".join(detail.get("files") or []),
+            ]
+            self.skill_meta_view.setPlainText("\n".join(lines))
+            self.skill_doc_view.setPlainText(str(detail.get("skill_md") or ""))
+        except Exception as e:
+            self.skill_meta_view.setPlainText("")
+            self.skill_doc_view.setPlainText("")
+            self.state["skills"]["selected_slug"] = None
+            if "Skill 不存在" in str(e):
+                self.notify(f"Skill 不存在或已切换 Agent: {slug}")
+                return
+            self.fail("读取 Skill 详情失败", e)
+
+    def install_skill(self):
+        agent_name = self._current_skill_agent() or self.state["runtime"].get("current_agent")
+        if not agent_name:
+            return
+        slug, ok = QInputDialog.getText(self, "安装 Skill", "请输入 Skill slug")
+        if not ok or not slug.strip():
+            return
+        slug = slug.strip()
+        overwrite = QMessageBox.question(
+            self,
+            "覆盖已存在 Skill",
+            "若 Skill 已存在，是否覆盖安装？",
+        ) == QMessageBox.Yes
+        try:
+            self.api_request(
+                "POST",
+                "/faust/admin/skills/install",
+                payload={"slug": slug, "agent_name": agent_name, "overwrite": overwrite},
+            )
+            self.state["skills"]["selected_slug"] = slug
+            self.load_skills()
+            self.notify(f"Skill 已安装: {slug}")
+        except Exception as e:
+            self.fail("安装 Skill 失败", e)
+
+    def install_skill_from_zip(self):
+        agent_name = self._current_skill_agent() or self.state["runtime"].get("current_agent")
+        if not agent_name:
+            return
+        zip_path, _ = QFileDialog.getOpenFileName(self, "选择 Skill ZIP", "", "ZIP Files (*.zip)")
+        if not zip_path:
+            return
+        overwrite = QMessageBox.question(
+            self,
+            "覆盖已存在 Skill",
+            "若 Skill 已存在，是否覆盖安装？",
+        ) == QMessageBox.Yes
+        try:
+            data = self.api_request(
+                "POST",
+                "/faust/admin/skills/install-zip",
+                payload={"zip_path": zip_path, "agent_name": agent_name, "overwrite": overwrite},
+            )
+            item = data.get("item") or {}
+            installed_slug = str(item.get("slug") or "").strip()
+            self.state["skills"]["selected_slug"] = installed_slug or None
+            self.load_skills()
+            self.notify(f"Skill ZIP 安装完成: {installed_slug or '-'}")
+        except Exception as e:
+            self.fail("从 ZIP 安装 Skill 失败", e)
+
+    def open_skill_directory(self):
+        agent_name = self._current_skill_agent() or self.state["runtime"].get("current_agent")
+        if not agent_name:
+            return
+        slug = self._selected_skill_slug()
+        if slug:
+            target = Path(f"../backend/agents/{agent_name}/skill.d/{slug}").resolve()
+        else:
+            target = Path(f"../backend/agents/{agent_name}/skill.d").resolve()
+        try:
+            if not target.exists():
+                QMessageBox.warning(self, "目录不存在", f"目录不存在:\n{target}")
+                return
+            os.startfile(target)
+            self.notify(f"已打开目录: {target}")
+        except Exception as e:
+            self.fail("打开 Skill 目录失败", e)
+
+    def set_skill_enabled(self, enabled: bool):
+        slug = self._selected_skill_slug()
+        if not slug:
+            return
+        agent_name = self._current_skill_agent() or self.state["runtime"].get("current_agent")
+        if not agent_name:
+            return
+        action = "enable" if enabled else "disable"
+        try:
+            self.api_request(
+                "POST",
+                f"/faust/admin/skills/{requests.utils.quote(slug, safe='')}/{action}",
+                payload={"agent_name": agent_name},
+            )
+            self.load_skills()
+            self.notify(f"Skill {slug} 已{'启用' if enabled else '禁用'}")
+        except Exception as e:
+            self.fail("Skill 状态切换失败", e)
+
+    def delete_skill(self):
+        slug = self._selected_skill_slug()
+        if not slug:
+            return
+        agent_name = self._current_skill_agent() or self.state["runtime"].get("current_agent")
+        if not agent_name:
+            return
+        if QMessageBox.question(self, "删除 Skill", f"确定删除 Skill {slug} 吗？") != QMessageBox.Yes:
+            return
+        try:
+            self.api_request(
+                "DELETE",
+                f"/faust/admin/skills/{requests.utils.quote(slug, safe='')}",
+                params={"agent_name": agent_name},
+            )
+            self.state["skills"]["selected_slug"] = None
+            self.load_skills()
+            self.notify(f"Skill 已删除: {slug}")
+        except Exception as e:
+            self.fail("删除 Skill 失败", e)
+
     def load_rag_documents(self, reset_page: bool = False):
         rag = self.state["rag"]
         if reset_page:
@@ -1013,6 +1327,7 @@ class ConfigerWindow(QMainWindow):
             self.load_services()
             self.load_rag_documents(reset_page=False)
             self.load_triggers()
+            self.load_skills()
             self.load_plugins()
             self.notify("已刷新配置与运行状态")
         except Exception as e:

@@ -525,6 +525,7 @@
   const CHAT_ENDPOINT = `ws://${CHAT_HOST}:${CHAT_PORT}/faust/chat`;
   const NIMBLE_CALLBACK_ENDPOINT = `http://${CHAT_HOST}:${CHAT_PORT}/faust/nimble/callback`;
   const NIMBLE_CLOSE_ENDPOINT = `http://${CHAT_HOST}:${CHAT_PORT}/faust/nimble/close`;
+  const HIL_FEEDBACK_ENDPOINT = `http://${CHAT_HOST}:${CHAT_PORT}/faust/humanInLoop/feedback`;
   let chatWs = null;
   let chatWsReady = null;
   let currentChatRequest = null;
@@ -615,6 +616,27 @@
         let payload = null;
         try{ payload = JSON.parse(arg); }catch(e){ console.warn('Invalid NIMBLE_CLOSE payload', e, arg); return; }
         if (payload && payload.callback_id) closeNimbleWindow(payload.callback_id, false);
+      } else if (cmd === 'HIL_APPROVAL'){
+        if (!arg) return;
+        let payload = null;
+        try{ payload = JSON.parse(arg); }catch(e){ console.warn('Invalid HIL_APPROVAL payload', e, arg); return; }
+        const title = String(payload?.request || '需要人工确认').trim();
+        const summary = String(payload?.summary || '').trim();
+        const approvalText = summary ? `${title}\n\n${summary}` : title;
+        const approved = window.confirm(approvalText);
+        try{
+          const r = await fetch(HIL_FEEDBACK_ENDPOINT, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ feedback: !!approved, id: payload?.ID || null })
+          });
+          const j = await r.json().catch(()=>({}));
+          if (!r.ok || j.error){
+            console.warn('HIL feedback failed', r.status, j);
+          }
+        }catch(e){
+          console.error('HIL feedback network error', e);
+        }
       } else if (cmd=="SET_MOTION"){
         if (!arg) return;
         playMotionByName(arg);
