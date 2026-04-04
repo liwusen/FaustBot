@@ -4,8 +4,6 @@
 
 ### 一个AI驱动的 Vtuber/桌宠
 
-模仿Neuro Sama
-
 **仍然处于早期开发阶段**
 
 ---
@@ -20,9 +18,9 @@
 
 - [x] 音乐播放（唱歌）
 
-- [x] 模型记忆系统(基于RAG系统)
+- [x] 模型记忆系统(基于RAG)
 
-- [x] Agent单独的Workspace
+- [x] 每个Agent单独的Workspace
 
 - [x] (独创)灵动交互系统 (前端HTML小窗口交互)
 
@@ -34,11 +32,15 @@
 
 - [x] AI 玩 Minecraft (基于Mineflyer构建，无缝体验)
 
+- [x] 读取屏幕内容
+
 - [x] 高速响应 平均时间<1s
 
-- [x] 插件系统
+- [x] 插件系统 [插件市场](https://liwusen.github.io/FaustBot-llm-vtuber/)
 
-- [ ] 操作网页 (Agent Browser)
+- [x] 兼容Openclaw Skill && Clawhub 技能
+
+- [x] 操作网页 (Agent Browser)
 
 - [ ] 给予AI单独的一个可交互Console
 
@@ -50,15 +52,15 @@
 
 ### 功能计划(长期)
 
-| 大饼          | 解释                 | 预计时间 |
-| ----------- | ------------------ | ---- |
-| Minecraft   | 使用Mineflyer，从底层完成  | 完成   |
-| 原创Live 2d形象 |                    | 待定   |
-| TTS 歌曲转换    |                    |      |
-| 游览器 操作      | Agent Browser 能力接入 |      |
-| OCR/VLLM支持  |                    |      |
-| 前端优化        |                    | 完成   |
-| 灵动交互        | 允许AI编写HTML实现交互     | 完成   |
+| 大饼          | 解释                 | 预计时间        |
+| ----------- | ------------------ | ----------- |
+| Minecraft   | 使用Mineflyer，从底层完成  | 完成          |
+| 原创Live 2d形象 |                    | 待定          |
+| TTS 歌曲转换    |                    |             |
+| 游览器 操作      | Agent Browser 能力接入 | 完成(Skill系统) |
+| OCR/VLLM支持  |                    | 部分完成        |
+| 前端优化        |                    | 完成          |
+| 灵动交互        | 允许AI编写HTML实现交互     | 完成          |
 
 ---
 
@@ -70,146 +72,266 @@
 
 ---
 
+### 
+
 ### 技术实现
 
 ```mermaid
 flowchart TD
-    A[外部输入/事件源] --> A1[用户文本输入<br/>WebSocket /faust/chat]
-    A --> A2[Minecraft事件<br/>minecraft_client.py]
-    A --> A3[Nimble用户提交/关闭<br/>/faust/nimble/callback]
-    A --> A4[定时/间隔/事件触发器<br/>trigger_manager.py]
-
-    subgraph B[入口层 backend-main.py]
-        B1[/faust/chat 接收消息/]
-        B2[/faust/command 主循环/]
-        B3[设置 ignore_trigger_event<br/>避免触发器干扰当前对话]
-        B4[消息去重与限流]
-        B5[会话上下文管理]
+    %% =========================
+    %% 1) 外部输入层
+    %% =========================
+    subgraph A[外部输入与事件源]
+        A1[用户文本输入]
+        A2[语音输入 ASR]
+        A3[Minecraft 事件]
+        A4[定时/间隔/表达式触发]
+        A5[Nimble 回调提交/关闭]
+        A6[配置中心操作]
+        A7[插件市场/技能管理请求]
     end
 
-    A1 --> B1
-    B1 --> B3
-    B3 --> B4
-    B4 --> B5
-
-    subgraph C[模型执行层]
-        C1[组装用户消息]
-        C2[Agent执行器<br/>create_agent deepseek-chat]
-        C3[加载角色上下文<br/>AGENT.md ROLE.md COREMEMORY.md TASK.md]
-        C4[流式输出消息 chunk]
-        C5[完整回复组装]
+    %% =========================
+    %% 2) 后端入口与运行时
+    %% =========================
+    subgraph B[后端主入口与运行时]
+        B1[启动应用]
+        B2[加载公开/私密配置]
+        B3[加载 Agent 人设与任务上下文]
+        B4[初始化 Checkpoint/Store]
+        B5[加载插件并组装 Tool/Middleware]
+        B6[启动触发器 Watchdog]
+        B7[启动插件心跳循环]
+        B8[启动子服务管理器]
+        B9[构建 Agent Runtime]
     end
 
-    B5 --> C1
-    C1 --> C2
-    C3 --> C2
-    C2 --> C4
-    C4 --> C5
+    B1 --> B2 --> B3 --> B4 --> B5 --> B6 --> B7 --> B8 --> B9
 
-    subgraph D[工具与数据处理层 llm_tools.py]
-        D1[普通工具<br/>时间/系统/日记/Python]
-        D2[RAG 查询工具<br/>rag_client.py]
-        D3[Minecraft 操作工具<br/>minecraft_client.send_command]
-        D4[Nimble 交互工具<br/>创建窗口/等待回调]
-        D5[Trigger 工具<br/>append_trigger]
-        D6[HIL 人审请求]
-
-        D2 --> D2A[异步RAG查询]
-        D2A --> D2B[返回上下文或注册触发器]
+    %% =========================
+    %% 3) API/WS 入口层
+    %% =========================
+    subgraph C[接口入口层]
+        C1[聊天 WebSocket]
+        C2[聊天 HTTP 兼容接口]
+        C3[命令 WebSocket]
+        C4[Nimble 回调接口]
+        C5[配置中心管理接口]
+        C6[插件/技能/触发器管理接口]
+        C7[RAG 文档管理接口]
     end
 
-    C2 -->|按需调用工具| D1
-    C2 -->|按需调用工具| D2
-    C2 -->|按需调用工具| D3
-    C2 -->|按需调用工具| D4
-    C2 -->|按需调用工具| D5
-    C2 -->|按需调用工具| D6
+    A1 --> C1
+    A2 --> C1
+    A5 --> C4
+    A6 --> C5
+    A7 --> C6
+    C6 --> C7
+    C5 --> C7
+    A3 --> D5
+    A4 --> D5
 
-    D2B --> E
-    D3 --> D3A[发送命令到 mc-operator]
-    D3A --> D3B[返回 command_result]
-    D3B --> C2
-
-    D4 --> D4A[nimble.create_session]
-    D4A --> D4B[backend2front 发送 NIMBLE_SHOW]
-    D4B --> F3
-    D4C[前端展示交互窗口] --> A3
-
-    A3 --> A3B[nimble.set_result / close_session]
-    A3B --> E
-
-    A2 --> A2B[收到 mc event]
-    A2B --> A2C[append_trigger event=mc_event]
-    A2C --> E
-
-    subgraph E[触发器调度中心 trigger_manager.py]
-        E1[触发器持久化到 triggers.json]
-        E2[watchdog 轮询<br/>datetime/interval/py-eval/event]
-        E3[满足条件后放入 trigger_queue]
-        E4[触发器执行去重<br/>防止递归触发]
+    %% =========================
+    %% 4) 聊天主链路
+    %% =========================
+    subgraph D[聊天与调度主链路]
+        D1[会话输入标准化]
+        D2[设置忽略触发器标记]
+        D3[Agent 流式/非流式推理]
+        D4[回复聚合与输出]
+        D5[触发器入队与取队执行]
+        D6[清理忽略触发器标记]
+        D7[聊天记录增量同步任务]
     end
 
-    A4 --> E1
-    D5 --> E1
-    A2C --> E1
-    E1 --> E2
-    E2 --> E3
-    E3 --> E4
+    C1 --> D1 --> D2 --> D3 --> D4 --> D6
+    C2 --> D1
+    C3 --> D5 --> D3
+    D4 --> D7
 
-    E4 -->|触发器触发| B2
-    E4 -->|异常处理| G2
-
-    B2 --> B2A[从 trigger_queue 取任务]
-    B2A --> B2B[设置 ignore_trigger_event]
-    B2B --> B2C[拼装 trigger_text]
-    B2C --> C1
-
-    C5 --> F1[WebSocket 返回完整回复]
-    C4 --> F2[实时流式输出]
-
-    subgraph F[前端与表现层]
-        F1[聊天窗口显示完整消息]
-        F2[聊天窗口实时显示]
-        F3[backend2front 指令队列]
-        F4[前端执行语音播放/角色表现]
-        F5[前端展示HIL交互界面]
+    %% =========================
+    %% 5) Agent 工具层
+    %% =========================
+    subgraph E[Agent 工具调用层]
+        E1[系统与时间工具]
+        E2[文件读写与补丁工具]
+        E3[RAG 同步查询工具]
+        E4[RAG 异步查询工具]
+        E5[Minecraft 控制工具]
+        E6[Nimble 窗口工具]
+        E7[触发器 CRUD 工具]
+        E8[GUI 操作工具]
+        E9[音频播放/表现工具]
+        E10[HIL 人工确认]
     end
 
-    C5 --> F3
-    F2 --> F1
-    F3 --> F4
-    D6 -->|发送HIL请求| F3
-    F3 --> F5
+    D3 --> E1
+    D3 --> E2
+    D3 --> E3
+    D3 --> E4
+    D3 --> E5
+    D3 --> E6
+    D3 --> E7
+    D3 --> E8
+    D3 --> E9
+    D3 --> E10
 
-    subgraph G[监控与异常处理层]
-        G1[性能埋点与日志]
-        G2[错误上报与重试]
-        G3[对话历史持久化]
-        G4[工具调用超时处理]
+    %% =========================
+    %% 6) RAG 数据链路
+    %% =========================
+    subgraph F[RAG 数据流]
+        F1[RAG 客户端]
+        F2[RAG 服务查询/插入]
+        F3[文档追踪器]
+        F4[会话记录落盘]
+        F5[增量索引]
+        F6[异步查询结果缓存]
+        F7[异步完成触发器]
     end
 
-    C2 --> G1
-    D2 --> G4
-    D3 --> G4
-    D6 --> G2
-    E --> G2
-    C5 --> G3
+    E3 --> F1 --> F2
+    E4 --> F1 --> F2
+    D7 --> F4 --> F5 --> F2
+    F1 --> F3
+    E4 --> F6 --> F7 --> D5
 
-    subgraph H[状态管理]
-        H1[对话模式: 普通/触发器/HIL等待]
-        H2[ignore_trigger_event 标志位]
-        H3[会话隔离]
+    %% =========================
+    %% 7) Nimble 交互闭环
+    %% =========================
+    subgraph G[Nimble 闭环]
+        G1[创建 Nimble 会话]
+        G2[推送窗口展示指令]
+        G3[用户提交/关闭]
+        G4[写入结果与会话状态]
+        G5[创建 result/reminder/expire 触发器]
+        G6[触发器唤醒 Agent 继续处理]
     end
 
-    B3 --> H2
-    B5 --> H3
-    D6 --> H1
-    E4 --> H1
+    E6 --> G1 --> G2
+    G1 --> G5 --> D5
+    A5 --> G3 --> G4 --> G6 --> D5
+    C4 --> G4
+
+    %% =========================
+    %% 8) 触发器系统
+    %% =========================
+    subgraph H[触发器系统]
+        H1[触发器持久化存储]
+        H2[Watchdog 轮询]
+        H3[append 过滤器]
+        H4[fire 过滤器]
+        H5[触发队列]
+    end
+
+    E7 --> H3 --> H1
+    A3 --> H3
+    A4 --> H3
+    H1 --> H2 --> H4 --> H5 --> D5
+    G5 --> H3
+
+    %% =========================
+    %% 9) 插件系统
+    %% =========================
+    subgraph I[插件系统]
+        I1[插件发现与加载]
+        I2[插件状态与配置]
+        I3[Tool/Middleware 注入]
+        I4[Trigger append/fire 过滤]
+        I5[心跳调度]
+        I6[手动重载]
+    end
+
+    B5 --> I1 --> I2 --> I3
+    I3 --> E1
+    I3 --> E2
+    I3 --> E3
+    I3 --> E4
+    I3 --> E5
+    I3 --> E6
+    I3 --> E7
+    I4 --> H3
+    I4 --> H4
+    B7 --> I5
+    C6 --> I6 --> B9
+
+    %% =========================
+    %% 10) 服务管理与子系统
+    %% =========================
+    subgraph J[服务管理与子系统]
+        J1[ASR 服务]
+        J2[TTS 服务]
+        J3[RAG 服务]
+        J4[MC Operator]
+        J5[服务状态探测/启停/重启]
+    end
+
+    B8 --> J5
+    C5 --> J5
+    J5 --> J1
+    J5 --> J2
+    J5 --> J3
+    J5 --> J4
+    E5 --> J4
+    E3 --> J3
+    E4 --> J3
+
+    %% =========================
+    %% 11) 前端与表现层
+    %% =========================
+    subgraph K[前端与表现层]
+        K1[主进程桥接]
+        K2[渲染层 UI 与 Live2D]
+        K3[流式聊天显示]
+        K4[TTS/音频播放]
+        K5[Nimble 窗口渲染]
+        K6[配置中心 GUI]
+    end
+
+    C3 --> K1 --> K2
+    D4 --> K3
+    E9 --> K4
+    G2 --> K5
+    K6 --> C5
+    K6 --> C6
+    K6 --> C7
+
+    %% =========================
+    %% 12) 管理面与重建链路
+    %% =========================
+    subgraph L[配置变更与运行时重建]
+        L1[保存配置]
+        L2[切换 Agent]
+        L3[重载配置]
+        L4[重建 Runtime]
+        L5[对齐 RAG Agent]
+    end
+
+    C5 --> L1 --> L3 --> L4 --> B9
+    C5 --> L2 --> L4
+    L4 --> L5 --> F1
+
+    %% =========================
+    %% 13) 输出与可观测性
+    %% =========================
+    subgraph M[输出与可观测性]
+        M1[流式 delta/done 返回]
+        M2[命令队列消息]
+        M3[日志与错误上报]
+        M4[对话/触发器/文档状态持久化]
+    end
+
+    D4 --> M1
+    C3 --> M2
+    B1 --> M3
+    D3 --> M3
+    H2 --> M3
+    F1 --> M3
+    D4 --> M4
+    H1 --> M4
+    F3 --> M4
 ```
 
 ~~Backend的一部分代码来源于 [morettt/my-neuro](https://github.com/morettt/my-neuro)~~
-
-现在已经不再有来源于morettt/my-neuro的内容了
 
 | 部分       | 实现                    |
 | -------- | --------------------- |
