@@ -10,8 +10,6 @@ from typing import Any
 
 import requests
 
-import faust_backend.config_loader as conf
-
 
 DEFAULT_MARKET_INDEX_URL = "https://raw.githubusercontent.com/faustbot-dev/faust_plugin_market/main/plugins.json"
 _SAFE_PLUGIN_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_\-]{0,63}$")
@@ -28,8 +26,7 @@ class PluginAlreadyInstalledError(PluginMarketError):
 def resolve_market_index_url(override_url: str | None = None) -> str:
     if override_url and str(override_url).strip():
         return str(override_url).strip()
-    cfg = getattr(conf, "config", {}) or {}
-    return str(cfg.get("PLUGIN_MARKET_INDEX_URL") or DEFAULT_MARKET_INDEX_URL)
+    return DEFAULT_MARKET_INDEX_URL
 
 
 def _fetch_json(url: str, *, timeout: float = 20.0) -> dict[str, Any]:
