@@ -160,7 +160,7 @@
           "ch_sim",
           "en"
         ],
-        "OCR_GPU": false,
+        "OCR_GPU": true,
         "OCR_MIN_CONF": 0.3,
         "PYAUTOGUI_PAUSE": 0.1,
         "PYAUTOGUI_FAILSAFE": true,

@@ -64,6 +64,11 @@ LIVE2D_KEYS = [
     "FRONTEND_CLICK_THROUGH",
     "FRONTEND_DEFAULT_TTS_LANG",
 ]
+TTS_KEYS = [
+    "TTS_REFER_WAV_PATH",
+    "TTS_PROMPT_TEXT", 
+    "TTS_PROMPT_LANGUAGE",
+]
 AGENT_FILES = ["AGENT.md", "ROLE.md", "COREMEMORY.md", "TASK.md"]
 
 
@@ -304,6 +309,39 @@ class ConfigerWindow(QMainWindow):
         group = QGroupBox("Live2D 配置")
         self.live2d_form = QFormLayout(group)
         layout.addWidget(group)
+
+        # TTS 参考音频配置
+        tts_group = QGroupBox("TTS参考音频配置")
+        tts_form = QFormLayout(tts_group)
+        
+        # 参考音频路径
+        self.tts_refer_wav_path_input = QLineEdit()
+        self.tts_refer_wav_path_input.setPlaceholderText("参考音频文件路径，如 role_voice_api/neuro/01.wav")
+        self.tts_browse_btn = QPushButton("浏览...")
+        self.tts_browse_btn.clicked.connect(self._browse_tts_refer_wav)
+        
+        path_layout = QHBoxLayout()
+        path_layout.addWidget(self.tts_refer_wav_path_input, 1)
+        path_layout.addWidget(self.tts_browse_btn)
+        tts_form.addRow("参考音频路径", path_layout)
+        
+        # 提示文本
+        self.tts_prompt_text_input = QPlainTextEdit()
+        self.tts_prompt_text_input.setMaximumHeight(80)
+        self.tts_prompt_text_input.setPlaceholderText("参考音频对应的文本内容")
+        tts_form.addRow("提示文本", self.tts_prompt_text_input)
+        
+        # 语言选择
+        self.tts_prompt_language_combo = QComboBox()
+        self.tts_prompt_language_combo.addItems(["zh", "en", "ja", "ko", "yue", "中文", "英文", "日文", "韩文", "粤语"])
+        tts_form.addRow("语言", self.tts_prompt_language_combo)
+        
+        # 应用更改按钮
+        self.tts_apply_btn = QPushButton("应用更改到 TTS 服务")
+        self.tts_apply_btn.clicked.connect(self._apply_tts_refer)
+        tts_form.addRow("", self.tts_apply_btn)
+        
+        layout.addWidget(tts_group)
 
         self.model_list = QListWidget()
         layout.addWidget(QLabel("可用模型"))
@@ -777,6 +815,15 @@ class ConfigerWindow(QMainWindow):
             field = self._widget_from_value(key, public_cfg.get(key))
             self.live2d_fields[key] = field
             self.live2d_form.addRow(QLabel(key), field.widget)
+
+        # 加载 TTS 配置到界面
+        self.tts_refer_wav_path_input.setText(public_cfg.get("TTS_REFER_WAV_PATH", ""))
+        self.tts_prompt_text_input.setPlainText(public_cfg.get("TTS_PROMPT_TEXT", ""))
+        
+        lang = public_cfg.get("TTS_PROMPT_LANGUAGE", "zh")
+        idx = self.tts_prompt_language_combo.findText(lang)
+        if idx >= 0:
+            self.tts_prompt_language_combo.setCurrentIndex(idx)
 
     def load_runtime_summary(self):
         data = self.api_request("GET", "/faust/admin/runtime")
@@ -1340,6 +1387,11 @@ class ConfigerWindow(QMainWindow):
             private_values = {k: self._field_value(v) for k, v in self.private_fields.items()}
             live2d_values = {k: self._field_value(v) for k, v in self.live2d_fields.items()}
             public_values.update(live2d_values)
+            
+            # 添加 TTS 配置
+            public_values["TTS_REFER_WAV_PATH"] = self.tts_refer_wav_path_input.text().strip()
+            public_values["TTS_PROMPT_TEXT"] = self.tts_prompt_text_input.toPlainText().strip()
+            public_values["TTS_PROMPT_LANGUAGE"] = self.tts_prompt_language_combo.currentText()
 
             self.api_request("POST", "/faust/admin/config", payload={"public": public_values, "private": private_values})
             self.notify("配置已保存")
@@ -1347,6 +1399,54 @@ class ConfigerWindow(QMainWindow):
             self.load_runtime_summary()
         except Exception as e:
             self.fail("保存配置失败", e)
+
+    def _browse_tts_refer_wav(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, 
+            "选择参考音频文件", 
+            "", 
+            "音频文件 (*.wav *.mp3 *.ogg *.flac *.m4a)"
+        )
+        if file_path:
+            self.tts_refer_wav_path_input.setText(file_path)
+            
+    def _apply_tts_refer(self):
+        try:
+            refer_wav_path = self.tts_refer_wav_path_input.text().strip()
+            prompt_text = self.tts_prompt_text_input.toPlainText().strip()
+            prompt_language = self.tts_prompt_language_combo.currentText()
+            
+            if not refer_wav_path or not prompt_text or not prompt_language:
+                QMessageBox.warning(self, "警告", "请填写完整的 TTS 参考音频配置")
+                return
+                
+            # 调用 TTS 服务的 /change_refer 接口
+            payload = {
+                "refer_wav_path": refer_wav_path,
+                "prompt_text": prompt_text,
+                "prompt_language": prompt_language
+            }
+            
+            # 注意：TTS 服务运行在 5000 端口，不是后端主服务的 13900 端口
+            response = requests.post("http://127.0.0.1:5000/change_refer", json=payload, timeout=30)
+            
+            if response.status_code == 200:
+                self.notify("TTS 参考音频已更新")
+                # 同时保存到主配置中
+                self.save_config()
+            else:
+                error_text = response.text
+                try:
+                    error_json = response.json()
+                    error_text = error_json.get("error", error_text)
+                except:
+                    pass
+                raise ApiError(f"TTS 服务返回错误: {response.status_code} - {error_text}")
+                
+        except requests.RequestException as e:
+            self.fail("TTS 服务请求失败", f"请确保 TTS 服务正在运行（端口 5000）: {str(e)}")
+        except Exception as e:
+            self.fail("应用 TTS 参考音频失败", e)
 
     def _apply_selected_model_path(self):
         row = self.model_list.currentRow()
