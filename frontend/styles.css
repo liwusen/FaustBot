@@ -38,6 +38,9 @@ body.click-through, body.click-through #app, body.click-through canvas {
 /* keep these interactive even in click-through mode */
 body.click-through #modelQuickController,
 body.click-through #textChatBar,
+body.click-through #statusDock,
+body.click-through #overlay,
+body.click-through .nimble-window,
 body.click-through #asrText {
   pointer-events: auto;
 }
