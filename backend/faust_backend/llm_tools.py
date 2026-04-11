@@ -660,6 +660,81 @@ def bgPlayTool(url: str) -> str:
     print("[llm_tools.bgPlayTool] Playing background music from URL:", url)
     backend2frontend.FrontEndPlayBG(url)
     return "背景音乐播放命令已发送到前端。"
+
+
+def _resolve_live2d_model_path() -> Path:
+    cfg = getattr(conf, "config", {}) or {}
+    model_rel = str(cfg.get("LIVE2D_MODEL_PATH", "2D/hiyori_pro_zh/hiyori_pro_t11.model3.json") or "").strip()
+    frontend_root = Path(conf.CONFIG_ROOT).parent / "frontend"
+    model_path = Path(model_rel)
+    if not model_path.is_absolute():
+        model_path = frontend_root / model_rel
+    return model_path
+
+
+def _read_model_motion_names(model_path: Path) -> list[str]:
+    if not model_path.exists() or not model_path.is_file():
+        return []
+    try:
+        data = json.loads(model_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    motions = (((data or {}).get("FileReferences") or {}).get("Motions") or {})
+    if not isinstance(motions, dict):
+        return []
+    return sorted([str(k) for k in motions.keys() if str(k).strip()])
+
+
+@add_to_tool_list
+@tool
+@record_func_name
+def listAvailableMotionsTool() -> str:
+    """
+    Description:
+        获取当前 Live2D 模型可用的 Motion 名称列表。
+        列表来源于当前配置的 LIVE2D_MODEL_PATH 对应的 model3.json 文件。
+    Args:
+        None
+    Returns:
+        str(json): 包含 model_path、motion_count 和 motions。
+    """
+    try:
+        model_path = _resolve_live2d_model_path()
+        motions = _read_model_motion_names(model_path)
+        payload = {
+            "status": "ok",
+            "model_path": str(model_path),
+            "motion_count": len(motions),
+            "motions": motions,
+        }
+        print("[llm_tools.listAvailableMotionsTool] model=", model_path, "count=", len(motions))
+        return json.dumps(payload, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False)
+
+
+@add_to_tool_list
+@tool
+@record_func_name
+def triggerMotionTool(motion_name: str) -> str:
+    """
+    Description:
+        触发指定 Live2D Motion。
+    Args:
+        motion_name (str): 要触发的 motion 名称，例如 Idle、TapBody。
+    Returns:
+        str(json): 执行状态与 motion 名称。
+    """
+    name = str(motion_name or "").strip()
+    if not name:
+        return json.dumps({"status": "error", "error": "motion_name 不能为空"}, ensure_ascii=False)
+    try:
+        print("[llm_tools.triggerMotionTool] Trigger motion:", name)
+        backend2frontend.frontendSetMotion(name)
+        return json.dumps({"status": "ok", "command": "SET_MOTION", "motion": name}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"status": "error", "error": str(e), "motion": name}, ensure_ascii=False)
+
 @add_to_tool_list
 @tool
 @record_func_name
@@ -682,40 +757,6 @@ def guiOpTool(command: str) -> str:
         return result_str
     except Exception as e:
         return f"执行GUI操作出错: {str(e)}"
-# @add_to_tool_list
-# @tool
-# def getUserFullScreenOCRResultTool() -> str:
-#     """
-#     Description:
-#         获取用户全屏截图的OCR识别结果。
-#         这个工具只应该在用户需要时执行。
-#     Returns:
-#         str: OCR识别结果的字符串表示，或者错误信息。
-#     """
-#     try:
-#         print("[llm_tools.getUserFullScreenOCRResultTool] Getting full screen OCR result.")
-#         # 这里调用实际的OCR处理逻辑
-#         ocr_result = "模拟的OCR识别结果"
-#         return ocr_result
-#     except Exception as e:
-#         return f"获取全屏OCR结果出错: {str(e)}"
-# @add_to_tool_list
-# @tool
-# async def test_HIL_tool():
-#     """
-#     Description:
-#         这是一个测试人类反馈工具的工具。
-#         它会向前端发送一个人类反馈请求，并等待用户的批准或拒绝。
-#     Args:
-#         None
-#     Returns:
-#         str: 用户的反馈结果，可能是 "approved", "rejected", "timeout" 或 "unknown"。
-#     """
-#     print("[llm_tools.test_HIL_tool] Sending human-in-the-loop feedback request.")
-#     result=await HILRequest(id="test_request",title="这是一个测试请求",summary="请批准或拒绝这个测试请求。")
-#     print("[llm_tools.test_HIL_tool] Received feedback result:", result)
-#     return f"用户反馈结果: {str(result)}"
-
 @add_to_tool_list
 @tool
 @record_func_name
