@@ -15,9 +15,9 @@ import aiosqlite
 import asyncio
 import queue
 import random
-os.environ["DEEPSEEK_API_KEY"]=conf.DEEPSEEK_API_KEY
+os.environ["DEEPSEEK_API_KEY"]=conf.CHAT_API_KEY
 os.environ["SEARCHAPI_API_KEY"]=conf.SEARCH_API_KEY
-os.environ["OPENAI_API_KEY"]=conf.DEEPSEEK_API_KEY
+os.environ["OPENAI_API_KEY"]=conf.CHAT_API_KEY
 os.environ["OPENAI_BASE_URL"]=conf.CHAT_API_BASE
 import faust_backend.llm_tools as llm_tools
 from langchain.agents.middleware import HumanInTheLoopMiddleware,SummarizationMiddleware,TodoListMiddleware
@@ -205,7 +205,7 @@ def _build_chat_model(*, model_name: str):
     # 统一走 OpenAI 兼容接口，模型名与base_url由配置控制。
     return ChatOpenAI(
         model=model_name,
-        api_key=conf.DEEPSEEK_API_KEY,
+        api_key=conf.CHAT_API_KEY,
         base_url=conf.CHAT_API_BASE,
     )
 
@@ -269,9 +269,9 @@ async def rebuild_runtime(*, reset_dialog: bool = False, no_initial_chat: bool =
     print("[main] Rebuilding runtime with reset_dialog =", reset_dialog, "no_initial_chat =", no_initial_chat)
     global agent, checkpointer, conn, storer, conn_for_store, AGENT_NAME, AGENT_ROOT
     conf.reload_configs()
-    os.environ["DEEPSEEK_API_KEY"] = conf.DEEPSEEK_API_KEY
+    os.environ["DEEPSEEK_API_KEY"] = conf.CHAT_API_KEY
     os.environ["SEARCHAPI_API_KEY"] = conf.SEARCH_API_KEY
-    os.environ["OPENAI_API_KEY"] = conf.DEEPSEEK_API_KEY
+    os.environ["OPENAI_API_KEY"] = conf.CHAT_API_KEY
     os.environ["OPENAI_BASE_URL"] = conf.CHAT_API_BASE
     AGENT_NAME = conf.AGENT_NAME
     AGENT_ROOT = os.path.join("agents", f"{AGENT_NAME}")
