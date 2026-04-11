@@ -21,6 +21,9 @@
     "LIVE2D_MODEL_Y": "",
     "FRONTEND_CLICK_THROUGH": true,
     "FRONTEND_DEFAULT_TTS_LANG": "zh",
+    "TTS_REFER_WAV_PATH": "D:/my-neuro/my-neuro-main/faust/backend/tts-hub/GPT-SoVITS-Bundle/role_voice_api/neuro/01.wav",
+    "TTS_PROMPT_TEXT": "Hold on please, I'm busy. Okay, I think I heard him say he wants me to stream Hollow Knight on Tuesday and Thursday.",
+    "TTS_PROMPT_LANGUAGE": "en",
     "PLUGIN_MARKET_INDEX_URL": "https://raw.githubusercontent.com/faustbot-dev/faust_plugin_market/main/plugins.json",
     "TEMP_DIR": "temp"
 }

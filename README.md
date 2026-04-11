@@ -113,41 +113,41 @@ flowchart TD
     I4 --> L[Nimble会话管理]
     L --> M[触发器注册]
     I5 --> N[触发器持久化]
-    
+
     %% 触发器系统
     subgraph H[触发器调度]
         H1[Watchdog轮询]
         H2[触发队列]
         H3[过滤器链]
     end
-    
+
     C --> H3
     D --> H3
     M --> H3
     N --> H1
     H1 --> H2 --> F
-    
+
     %% 插件系统
     O[插件系统] --> I
     O --> H3
-    
+
     %% 前端输出
     J --> P[前端流式输出]
     B2 --> Q[命令转发]
     Q --> R[Live2D展示/TTS]
     I6 --> R
     L --> S[Nimble窗口渲染]
-    
+
     %% 配置管理
     B4 --> T[配置/Agent管理]
     T --> U[运行时重建]
     U --> G
-    
+
     %% 数据持久化
     K --> V[聊天记录落盘]
     J --> V
     V --> W[RAG增量索引]
-    
+
     %% 标注
     style B fill:#e1f5fe
     style G fill:#f3e5f5
@@ -162,3 +162,7 @@ flowchart TD
 | -------- | --------------------- |
 | Backend  | Python为主体,基于langchain |
 | Frontend | Electron+Qt           |
+
+### 附加声明
+
+###### 本项目于2026/4/11被作为 赛道2 - 青少年人工智能工具应用大赛 **项目二：交互式应用开发** 的参赛项目提交，按照MIT 协议授权.

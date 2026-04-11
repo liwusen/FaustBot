@@ -61,6 +61,12 @@ def load_configs():
     RAG_EMBED_DIM = int(config.get('RAG_EMBED_DIM', 1536) or 1536)
     RAG_EMBED_MAX_TOKEN_SIZE = int(config.get('RAG_EMBED_MAX_TOKEN_SIZE', 8192) or 8192)
     RAG_AUTO_INDEX_RECORD = config.get('RAG_AUTO_INDEX_RECORD', True)
+    
+    # TTS 参考音频配置
+    TTS_REFER_WAV_PATH = config.get('TTS_REFER_WAV_PATH', '')
+    TTS_PROMPT_TEXT = config.get('TTS_PROMPT_TEXT', '')
+    TTS_PROMPT_LANGUAGE = config.get('TTS_PROMPT_LANGUAGE', 'zh')
+    
     AGENT_ROOT=p_join(CONFIG_ROOT, "agents", AGENT_NAME)
     return config, private_config
 
