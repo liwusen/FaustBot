@@ -22,6 +22,8 @@ AGENT_CORE_FILES = ["AGENT.md", "ROLE.md", "COREMEMORY.md", "TASK.md"]
 PUBLIC_CONFIG_DEFAULTS = {
     "GUI_OPERATOR_LLM_MODEL": "gui-plus",
     "GUI_OPERATOR_LLM_BASE": "https://www.dmxapi.cn/v1/chat/completions",
+    "CHAT_MODEL": "gpt-4o",
+    "CHAT_API_BASE": "https://www.dmxapi.cn/v1",
     "AGENT_NAME": "faust",
     "SECURITY_VERIFIER_API_ENDPOINT": "https://www.dmxapi.cn/v1",
     "SECURITY_VERIFIER_LLM_MODEL": "qwen3.5-flash",
@@ -48,7 +50,7 @@ PUBLIC_CONFIG_DEFAULTS = {
     "TTS_PROMPT_LANGUAGE": "zh",
 }
 PRIVATE_CONFIG_DEFAULTS = {
-    "DEEPSEEK_API_KEY": "",
+    "CHAT_API_KEY": "",
     "SEARCH_API_KEY": "",
     "GUI_OPERATOR_LLM_KEY": "",
     "SECURITY_VERIFIER_LLM_KEY": "",
@@ -101,6 +103,9 @@ def get_public_config() -> Dict[str, Any]:
 def get_private_config(mask_secrets: bool = True) -> Dict[str, Any]:
     ensure_private_config_exists()
     data = _read_json(PRIVATE_CONFIG_PATH, PRIVATE_CONFIG_DEFAULTS)
+    legacy_chat = data.get("DEEPSEEK_API_KEY")
+    if legacy_chat and not data.get("CHAT_API_KEY"):
+        data["CHAT_API_KEY"] = legacy_chat
     legacy_rag = data.get("RAG_OPENAI_KEY")
     if legacy_rag and not data.get("RAG_OPENAI_API_KEY"):
         data["RAG_OPENAI_API_KEY"] = legacy_rag
@@ -136,19 +141,28 @@ def save_config(payload: Dict[str, Any]) -> Dict[str, Any]:
     public_cfg = get_public_config()
     private_cfg = _read_json(PRIVATE_CONFIG_PATH, PRIVATE_CONFIG_DEFAULTS)
 
-    for key in PUBLIC_CONFIG_DEFAULTS:
-        if key in public_in:
-            public_cfg[key] = public_in[key]
+    # 兼容老键：若历史配置只有 DEEPSEEK_API_KEY，则迁移到 CHAT_API_KEY。
+    if private_cfg.get("DEEPSEEK_API_KEY") and not private_cfg.get("CHAT_API_KEY"):
+        private_cfg["CHAT_API_KEY"] = private_cfg.get("DEEPSEEK_API_KEY")
+    private_cfg.pop("DEEPSEEK_API_KEY", None)
 
-    for key in PRIVATE_CONFIG_DEFAULTS:
-        if key in private_in:
-            value = private_in[key]
-            if value == "********":
-                continue
-            private_cfg[key] = value
+    for key, value in public_in.items():
+        public_cfg[skey] = value
+
+    # 固定项：插件市场索引URL改为代码内常量，不再允许配置文件覆盖。
+    public_cfg.pop("PLUGIN_MARKET_INDEX_URL", None)
+
+    for key, value in private_in.items():
+        skey = str(key)
+        if value == "********":
+            continue
+        if skey == "DEEPSEEK_API_KEY":
+            skey = "CHAT_API_KEY"
+        private_cfg[skey] = value
 
     if "RAG_OPENAI_API_KEY" in private_cfg:
         private_cfg.pop("RAG_OPENAI_KEY", None)
+    private_cfg.pop("DEEPSEEK_API_KEY", None)
 
     _write_json(PUBLIC_CONFIG_PATH, public_cfg)
     _write_json(PRIVATE_CONFIG_PATH, private_cfg)

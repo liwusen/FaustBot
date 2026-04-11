@@ -50,7 +50,7 @@ PUBLIC_PROVIDER_KEYS = [
     "MC_EVENT_TRIGGER_ENABLED",
 ]
 PRIVATE_PROVIDER_KEYS = [
-    "DEEPSEEK_API_KEY",
+    "CHAT_API_KEY",
     "SEARCH_API_KEY",
     "GUI_OPERATOR_LLM_KEY",
     "SECURITY_VERIFIER_LLM_KEY",
@@ -70,6 +70,10 @@ TTS_KEYS = [
     "TTS_PROMPT_LANGUAGE",
 ]
 AGENT_FILES = ["AGENT.md", "ROLE.md", "COREMEMORY.md", "TASK.md"]
+
+# 不在 AI Provider 区域重复展示的 public 配置键（这些键在其他 tab 中展示）。
+PUBLIC_PROVIDER_EXCLUDE_KEYS = set(LIVE2D_KEYS + TTS_KEYS)
+PUBLIC_PROVIDER_EXCLUDE_KEYS.add("PLUGIN_MARKET_INDEX_URL")
 
 
 @dataclass
@@ -801,12 +805,40 @@ class ConfigerWindow(QMainWindow):
         self.private_fields.clear()
         self.live2d_fields.clear()
 
+        public_ordered_keys = []
         for key in PUBLIC_PROVIDER_KEYS:
+            if key in PUBLIC_PROVIDER_EXCLUDE_KEYS:
+                continue
+            if key in public_cfg:
+                public_ordered_keys.append(key)
+        extra_public = [
+            k for k in public_cfg.keys()
+            if k not in public_ordered_keys and k not in PUBLIC_PROVIDER_EXCLUDE_KEYS
+        ]
+        public_ordered_keys.extend(sorted(extra_public))
+
+        for key in public_ordered_keys:
             field = self._widget_from_value(key, public_cfg.get(key))
             self.public_fields[key] = field
             self.public_form.addRow(QLabel(key), field.widget)
 
+        private_ordered_keys = []
         for key in PRIVATE_PROVIDER_KEYS:
+            if key in private_cfg:
+                private_ordered_keys.append(key)
+        # 兼容老键显示：若后端仍返回 DEEPSEEK_API_KEY，则在UI中映射到 CHAT_API_KEY。
+        if "CHAT_API_KEY" not in private_cfg and "DEEPSEEK_API_KEY" in private_cfg:
+            private_cfg["CHAT_API_KEY"] = private_cfg.get("DEEPSEEK_API_KEY")
+            if "CHAT_API_KEY" not in private_ordered_keys:
+                private_ordered_keys.insert(0, "CHAT_API_KEY")
+
+        extra_private = [
+            k for k in private_cfg.keys()
+            if k not in private_ordered_keys and k != "DEEPSEEK_API_KEY"
+        ]
+        private_ordered_keys.extend(sorted(extra_private))
+
+        for key in private_ordered_keys:
             field = self._widget_from_value(key, private_cfg.get(key))
             self.private_fields[key] = field
             self.private_form.addRow(QLabel(key), field.widget)
