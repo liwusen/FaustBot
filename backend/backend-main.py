@@ -15,6 +15,8 @@ import asyncio
 import queue
 os.environ["DEEPSEEK_API_KEY"]=conf.DEEPSEEK_API_KEY
 os.environ["SEARCHAPI_API_KEY"]=conf.SEARCH_API_KEY
+os.environ["OPENAI_API_KEY"]=conf.DEEPSEEK_API_KEY
+os.environ["OPENAI_BASE_URL"]=conf.CHAT_API_BASE
 import faust_backend.llm_tools as llm_tools
 from langchain.agents.middleware import HumanInTheLoopMiddleware,SummarizationMiddleware,TodoListMiddleware
 from langgraph.store.sqlite import AsyncSqliteStore
@@ -123,7 +125,7 @@ async def stream_agent_locked(target_agent, payload, config=None):
     async with agent_lock:
         print("[main.ai_call] Start Invoking llm")
         async for message_chunk, metadata in target_agent.astream(payload, config, stream_mode="messages"):
-            if message_chunk.content and metadata.get("langgraph_node")!="tools":
+            if message_chunk.content and metadata.get("langgraph_node")!="tools" and _is_ai_message_chunk(message_chunk):
                 yield message_chunk, metadata
         print("[main.ai_call] End Invoking llm")
 startServices()
@@ -179,12 +181,44 @@ def _has_checkpoint_db(agent_root: str) -> bool:
     return os.path.exists(pjoin(agent_root, "faust_checkpoint.db"))
 
 
+def _message_content_to_text(content) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+                continue
+            if not isinstance(block, dict):
+                continue
+            btype = str(block.get("type") or "").strip().lower()
+            if btype == "text":
+                text_val = block.get("text")
+                if text_val is not None:
+                    parts.append(str(text_val))
+        return "".join(parts)
+    return str(content)
+
+
+def _is_ai_message_chunk(message_chunk) -> bool:
+    msg_type = str(getattr(message_chunk, "type", "")).strip().lower()
+    if msg_type == "ai":
+        return True
+    cls_name = message_chunk.__class__.__name__.lower()
+    return "aimessage" in cls_name
+
+
 async def rebuild_runtime(*, reset_dialog: bool = False, no_initial_chat: bool = False):
     print("[main] Rebuilding runtime with reset_dialog =", reset_dialog, "no_initial_chat =", no_initial_chat)
     global agent, checkpointer, conn, storer, conn_for_store, AGENT_NAME, AGENT_ROOT
     conf.reload_configs()
     os.environ["DEEPSEEK_API_KEY"] = conf.DEEPSEEK_API_KEY
     os.environ["SEARCHAPI_API_KEY"] = conf.SEARCH_API_KEY
+    os.environ["OPENAI_API_KEY"] = conf.DEEPSEEK_API_KEY
+    os.environ["OPENAI_BASE_URL"] = conf.CHAT_API_BASE
     AGENT_NAME = conf.AGENT_NAME
     AGENT_ROOT = os.path.join("agents", f"{AGENT_NAME}")
     print("[main]Rubuilding Target Agent:", AGENT_NAME)
@@ -220,7 +254,7 @@ async def rebuild_runtime(*, reset_dialog: bool = False, no_initial_chat: bool =
         checkpointer=InMemorySaver()
         storer=InMemoryStore()
     print("[main] Checkpoint and store initialized for rebuild.")
-    agent = _create_agent_with_extensions(model="deepseek-chat", checkpointer=checkpointer, store=storer)
+    agent = _create_agent_with_extensions(model=conf.CHAT_MODEL, checkpointer=checkpointer, store=storer)
     try:
         await admin_runtime.align_rag_agent(AGENT_NAME)
     except Exception as e:
@@ -270,8 +304,8 @@ async def startup_event():
     middlewares=[]
     #--- End of checkpoint middleware and store setup
     #--- Create the agent with the specified model, tools, and checkpoint/store.
-    agent=_create_agent_with_extensions(model="deepseek-chat", checkpointer=checkpointer, store=storer)
-    print("[main]Agent created with Deepseek-chat model and tools.")
+    agent=_create_agent_with_extensions(model=conf.CHAT_MODEL, checkpointer=checkpointer, store=storer)
+    print(f"[main]Agent created with {conf.CHAT_MODEL} model and tools.")
     llm_tools.refresh_runtime_paths()
     if NOT_INITIALIZED:
         await invoke_agent_locked(agent,{"messages":[{"role":"system","content":PROMPT}]})
@@ -938,7 +972,7 @@ async def chat_post(payload: dict):
     try:
         events.ignore_trigger_event.set()
         resp = await invoke_agent_locked(agent,{"messages":[{"role":"user","content":text}]})
-        reply = resp["messages"][-1].content
+        reply = _message_content_to_text(resp["messages"][-1].content)
         schedule_rag_record_sync(text, reply)
         print('Chat post reply', reply)
         events.ignore_trigger_event.clear()
@@ -974,10 +1008,13 @@ async def chat_websocket(websocket: WebSocket):
                 reply = ""
                 print("[main] Received chat message:", text)
                 async for message_chunk, metadata in stream_agent_locked(agent,{"messages":[{"role":"user","content":text}]}):
-                    if message_chunk.content and metadata.get("langgraph_node")!="tools":
-                        reply += message_chunk.content
-                        print(message_chunk.content, end="|", flush=True)
-                        await websocket.send_text(json.dumps({"type": "delta", "content": message_chunk.content}, ensure_ascii=False))
+                    if message_chunk.content and metadata.get("langgraph_node")!="tools" and _is_ai_message_chunk(message_chunk):
+                        delta_text = _message_content_to_text(message_chunk.content)
+                        if not delta_text:
+                            continue
+                        reply += delta_text
+                        print(delta_text, end="|", flush=True)
+                        await websocket.send_text(json.dumps({"type": "delta", "content": delta_text}, ensure_ascii=False))
                 schedule_rag_record_sync(text, reply)
                 await websocket.send_text(json.dumps({"type": "done", "reply": reply}, ensure_ascii=False))
                 print()

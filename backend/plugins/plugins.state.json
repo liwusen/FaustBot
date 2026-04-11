@@ -167,6 +167,82 @@
         "DEFAULT_TYPE_INTERVAL": 0.02,
         "SCROLL_STEP": 300
       }
+    },
+    "mm_bridge": {
+      "schema": [
+        {
+          "key": "ENABLE_MM_BRIDGE",
+          "type": "bool",
+          "label": "启用多模态桥接",
+          "description": "",
+          "default": true
+        },
+        {
+          "key": "REMOVE_SOURCE_TOOL_MESSAGE",
+          "type": "bool",
+          "label": "桥接后删除源ToolMessage",
+          "description": "",
+          "default": false
+        },
+        {
+          "key": "MAX_SCAN_TOOL_MESSAGES",
+          "type": "int",
+          "label": "每轮扫描最近ToolMessage条数",
+          "description": "",
+          "default": 6
+        }
+      ],
+      "values": {
+        "ENABLE_MM_BRIDGE": true,
+        "REMOVE_SOURCE_TOOL_MESSAGE": false,
+        "MAX_SCAN_TOOL_MESSAGES": 6
+      }
+    },
+    "vision_tools": {
+      "schema": [
+        {
+          "key": "ENABLE_CAPTURE_SCREEN",
+          "type": "bool",
+          "label": "启用屏幕截图工具",
+          "description": "",
+          "default": true
+        },
+        {
+          "key": "ENABLE_READ_IMAGE_FILE",
+          "type": "bool",
+          "label": "启用本地读图工具",
+          "description": "",
+          "default": true
+        },
+        {
+          "key": "IMAGE_RETURN_MODE",
+          "type": "str",
+          "label": "图片返回模式(data_url/file_url)",
+          "description": "",
+          "default": "data_url"
+        },
+        {
+          "key": "MAX_IMAGE_EDGE",
+          "type": "int",
+          "label": "图片最长边像素上限",
+          "description": "",
+          "default": 1600
+        },
+        {
+          "key": "JPEG_QUALITY",
+          "type": "int",
+          "label": "JPEG压缩质量",
+          "description": "",
+          "default": 85
+        }
+      ],
+      "values": {
+        "ENABLE_CAPTURE_SCREEN": true,
+        "ENABLE_READ_IMAGE_FILE": true,
+        "IMAGE_RETURN_MODE": "data_url",
+        "MAX_IMAGE_EDGE": 1600,
+        "JPEG_QUALITY": 85
+      }
     }
   }
 }

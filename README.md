@@ -42,6 +42,8 @@
 
 - [x] 操作网页 (Agent Browser)
 
+- [x] 多模态模型支持
+
 - [ ] 给予AI单独的一个可交互Console
 
 - [ ] MCP协议支持
