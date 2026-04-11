@@ -14,7 +14,9 @@
     },
     "ui_operator": {
       "enabled": true
-    }
+    },
+    "mm_bridge": {},
+    "vision_tools": {}
   },
   "configs": {
     "clipboard": {
@@ -190,12 +192,20 @@
           "label": "每轮扫描最近ToolMessage条数",
           "description": "",
           "default": 6
+        },
+        {
+          "key": "IMAGE_MESSAGE_KEEP_TURNS",
+          "type": "int",
+          "label": "图片消息保留轮数",
+          "description": "",
+          "default": 2
         }
       ],
       "values": {
         "ENABLE_MM_BRIDGE": true,
-        "REMOVE_SOURCE_TOOL_MESSAGE": false,
-        "MAX_SCAN_TOOL_MESSAGES": 6
+        "REMOVE_SOURCE_TOOL_MESSAGE": true,
+        "MAX_SCAN_TOOL_MESSAGES": 6,
+        "IMAGE_MESSAGE_KEEP_TURNS": 2
       }
     },
     "vision_tools": {
@@ -222,7 +232,7 @@
           "default": "data_url"
         },
         {
-          "key": "MAX_IMAGE_EDGE",
+          "key": "MAX_PIXELS",
           "type": "int",
           "label": "图片最长边像素上限",
           "description": "",
@@ -241,7 +251,8 @@
         "ENABLE_READ_IMAGE_FILE": true,
         "IMAGE_RETURN_MODE": "data_url",
         "MAX_IMAGE_EDGE": 1600,
-        "JPEG_QUALITY": 85
+        "JPEG_QUALITY": 85,
+        "MAX_PIXELS": 200
       }
     }
   }

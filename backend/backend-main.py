@@ -4,6 +4,7 @@ import json
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from langchain.agents import create_agent
+from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
 import faust_backend.config_loader as conf
 import faust_backend.backend2front as backend2frontend
@@ -13,6 +14,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 import aiosqlite
 import asyncio
 import queue
+import random
 os.environ["DEEPSEEK_API_KEY"]=conf.DEEPSEEK_API_KEY
 os.environ["SEARCHAPI_API_KEY"]=conf.SEARCH_API_KEY
 os.environ["OPENAI_API_KEY"]=conf.DEEPSEEK_API_KEY
@@ -107,27 +109,69 @@ def schedule_rag_record_sync(user_text: str, assistant_text: str) -> None:
     asyncio.create_task(_job())
 
 OVERWRITE_LOCK=True
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return ("429" in text) or ("rate" in text and "limit" in text) or ("bad_response_status_code" in text)
+
+
+def _format_chat_error(exc: Exception) -> str:
+    if _is_rate_limit_error(exc):
+        return (
+            "上游模型网关触发限流(429)，请稍后重试。"
+            "若正在发送图片，请降低 MAX_PIXELS 或减少并发请求。"
+        )
+    return str(exc)
+
+
+async def _sleep_backoff(attempt: int) -> None:
+    # 轻量退避，避免在网关限流窗口内连续重试。
+    base = 0.8 * (2 ** max(0, attempt - 1))
+    jitter = random.uniform(0.0, 0.35)
+    await asyncio.sleep(min(3.0, base + jitter))
+
+
 async def invoke_agent_locked(target_agent, payload, config=None):
     if config is None:
         config = {"configurable": {"thread_id": THREAD_ID}}
-    print("[main.ai_call] Waiting for lock")
-    async with agent_lock:
-        print("[main.ai_call] Start Invoking llm")
-        res=await target_agent.ainvoke(payload, config)
-        print("[main.ai_call] End Invoking llm")
-        return res
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        print("[main.ai_call] Waiting for lock")
+        async with agent_lock:
+            print("[main.ai_call] Start Invoking llm")
+            try:
+                res = await target_agent.ainvoke(payload, config)
+                print("[main.ai_call] End Invoking llm")
+                return res
+            except Exception as e:
+                if _is_rate_limit_error(e) and attempt < max_attempts:
+                    print(f"[main.ai_call] 429 retry attempt={attempt}/{max_attempts}")
+                else:
+                    raise
+        await _sleep_backoff(attempt)
 
 
 async def stream_agent_locked(target_agent, payload, config=None):
     if config is None:
         config = {"configurable": {"thread_id": THREAD_ID}}
-    print("[main.ai_call] Waiting for lock")
-    async with agent_lock:
-        print("[main.ai_call] Start Invoking llm")
-        async for message_chunk, metadata in target_agent.astream(payload, config, stream_mode="messages"):
-            if message_chunk.content and metadata.get("langgraph_node")!="tools" and _is_ai_message_chunk(message_chunk):
-                yield message_chunk, metadata
-        print("[main.ai_call] End Invoking llm")
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        print("[main.ai_call] Waiting for lock")
+        async with agent_lock:
+            print("[main.ai_call] Start Invoking llm")
+            try:
+                async for message_chunk, metadata in target_agent.astream(payload, config, stream_mode="messages"):
+                    if message_chunk.content and metadata.get("langgraph_node")!="tools" and _is_ai_message_chunk(message_chunk):
+                        yield message_chunk, metadata
+                print("[main.ai_call] End Invoking llm")
+                return
+            except Exception as e:
+                if _is_rate_limit_error(e) and attempt < max_attempts:
+                    print(f"[main.ai_call] 429 retry attempt={attempt}/{max_attempts}")
+                else:
+                    raise
+        await _sleep_backoff(attempt)
 startServices()
 
 
@@ -157,10 +201,20 @@ async def _plugin_heartbeat_loop():
             await asyncio.sleep(1.0)
 
 
-def _create_agent_with_extensions(*, model: str, checkpointer, store):
+def _build_chat_model(*, model_name: str):
+    # 统一走 OpenAI 兼容接口，模型名与base_url由配置控制。
+    return ChatOpenAI(
+        model=model_name,
+        api_key=conf.DEEPSEEK_API_KEY,
+        base_url=conf.CHAT_API_BASE,
+    )
+
+
+def _create_agent_with_extensions(*, model_name: str, checkpointer, store):
     tools, middlewares = _compose_runtime_extensions()
+    chat_model = _build_chat_model(model_name=model_name)
     kwargs = {
-        "model": model,
+        "model": chat_model,
         "checkpointer": checkpointer,
         "tools": tools,
         "store": store,
@@ -254,7 +308,7 @@ async def rebuild_runtime(*, reset_dialog: bool = False, no_initial_chat: bool =
         checkpointer=InMemorySaver()
         storer=InMemoryStore()
     print("[main] Checkpoint and store initialized for rebuild.")
-    agent = _create_agent_with_extensions(model=conf.CHAT_MODEL, checkpointer=checkpointer, store=storer)
+    agent = _create_agent_with_extensions(model_name=conf.CHAT_MODEL, checkpointer=checkpointer, store=storer)
     try:
         await admin_runtime.align_rag_agent(AGENT_NAME)
     except Exception as e:
@@ -304,7 +358,7 @@ async def startup_event():
     middlewares=[]
     #--- End of checkpoint middleware and store setup
     #--- Create the agent with the specified model, tools, and checkpoint/store.
-    agent=_create_agent_with_extensions(model=conf.CHAT_MODEL, checkpointer=checkpointer, store=storer)
+    agent=_create_agent_with_extensions(model_name=conf.CHAT_MODEL, checkpointer=checkpointer, store=storer)
     print(f"[main]Agent created with {conf.CHAT_MODEL} model and tools.")
     llm_tools.refresh_runtime_paths()
     if NOT_INITIALIZED:
@@ -979,7 +1033,7 @@ async def chat_post(payload: dict):
         return {"reply": reply,"warning": "使用websocket /faust/chat接口以获得更好的前端流式体验和更低的延迟。"}
     except Exception as e:
         print("Chat post error:", e)
-        return {"error": str(e), "warning": "使用websocket /faust/chat接口以获得更好的前端流式体验和更低的延迟。"}
+        return {"error": _format_chat_error(e), "warning": "使用websocket /faust/chat接口以获得更好的前端流式体验和更低的延迟。"}
 
 @app.websocket("/faust/chat")
     
@@ -1022,7 +1076,7 @@ async def chat_websocket(websocket: WebSocket):
             except Exception as e:
                 events.ignore_trigger_event.clear()
                 print("Chat websocket error:", e)
-                await websocket.send_text(json.dumps({"type": "error", "error": str(e)}, ensure_ascii=False))
+                await websocket.send_text(json.dumps({"type": "error", "error": _format_chat_error(e)}, ensure_ascii=False))
     except WebSocketDisconnect:
         print("[main] chat websocket disconnected")
 

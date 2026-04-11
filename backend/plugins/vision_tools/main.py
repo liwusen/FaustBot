@@ -68,9 +68,7 @@ def _make_payload(text: str, image_url: str, meta: dict[str, Any] | None = None)
 
 
 def _resolve_max_pixels(ctx: PluginContext) -> int:
-    configured = ctx.get_config("MAX_PIXELS", None)
-    if configured is None or str(configured).strip() == "":
-        configured = ctx.get_config("MAX_IMAGE_EDGE", 1600)
+    configured = ctx.get_config("MAX_PIXELS", 1600)
     return max(64, _safe_int(configured, 1600))
 
 
@@ -102,7 +100,6 @@ class Plugin:
             ENABLE_READ_IMAGE_FILE:bool:启用本地读图工具=true
             IMAGE_RETURN_MODE:str:图片返回模式(data_url/file_url)=data_url
             MAX_PIXELS:int:图片最长边像素上限=1600
-            MAX_IMAGE_EDGE:int:图片最长边像素上限=1600
             JPEG_QUALITY:int:JPEG压缩质量=85
             """
         )
