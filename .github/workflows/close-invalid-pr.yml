@@ -1,0 +1,56 @@
+name: Close Invalid PRs
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - edited
+      - synchronize
+
+permissions:
+  pull-requests: write
+
+jobs:
+  close-invalid-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close invalid pull request
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const baseRef = context.payload.pull_request.base.ref;
+            const headRef = context.payload.pull_request.head.ref;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pullNumber = context.payload.pull_request.number;
+
+            const isTargetingDev = baseRef === 'dev';
+            const isDevToMain = headRef === 'dev' && baseRef === 'main';
+
+            if (isTargetingDev || isDevToMain) {
+              core.info(`PR #${pullNumber} is allowed: ${headRef} -> ${baseRef}`);
+              return;
+            }
+
+            const commentBody = [
+              'Closing this pull request automatically.',
+              '',
+              'Allowed pull request directions:',
+              '- any branch -> dev',
+              '- dev -> main',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: pullNumber,
+              body: commentBody,
+            });
+
+            await github.rest.pulls.update({
+              owner,
+              repo,
+              pull_number: pullNumber,
+              state: 'closed',
+            });
