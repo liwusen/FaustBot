@@ -149,8 +149,6 @@ def save_config(payload: Dict[str, Any]) -> Dict[str, Any]:
     for key, value in public_in.items():
         public_cfg[skey] = value
 
-    # 固定项：插件市场索引URL改为代码内常量，不再允许配置文件覆盖。
-    public_cfg.pop("PLUGIN_MARKET_INDEX_URL", None)
 
     for key, value in private_in.items():
         skey = str(key)
