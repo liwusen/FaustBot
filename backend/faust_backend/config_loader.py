@@ -31,7 +31,7 @@ def _ensure_private_config_exists():
 def load_configs():
     global private_config, config
     global DEEPSEEK_API_KEY, SEARCH_API_KEY, GUI_OPERATOR_LLM_KEY, SECURITY_VERIFIER_LLM_KEY, RAG_OPENAI_API_KEY
-    global GUI_OPERATOR_LLM_MODEL, GUI_OPERATOR_LLM_BASE, PT_EVAL_TRIGGER_ENABLED, AGENT_NAME
+    global GUI_OPERATOR_LLM_MODEL, GUI_OPERATOR_LLM_BASE, CHAT_MODEL, CHAT_API_BASE, PT_EVAL_TRIGGER_ENABLED, AGENT_NAME
     global SECURITY_VERIFIER_LLM_API_ENDPOINT, SECURITY_VERIFIER_LLM_MODEL, SECURITY_SYS_ENABLED, AGENT_ROOT
     global RAG_ENABLED, RAG_API_URL, RAG_LLM_BASE_URL, RAG_CHAT_MODEL, RAG_EMBED_MODEL, RAG_EMBED_DIM, RAG_EMBED_MAX_TOKEN_SIZE, RAG_AUTO_INDEX_RECORD
     _ensure_private_config_exists()
@@ -48,6 +48,8 @@ def load_configs():
 
     GUI_OPERATOR_LLM_MODEL = config.get('GUI_OPERATOR_LLM_MODEL', 'gui-plus')
     GUI_OPERATOR_LLM_BASE = config.get('GUI_OPERATOR_LLM_BASE', 'https://www.dmxapi.cn/v1/chat/completions')
+    CHAT_MODEL = config.get('CHAT_MODEL', 'gpt-4o')
+    CHAT_API_BASE = config.get('CHAT_API_BASE', 'https://www.dmxapi.cn/v1')
     PT_EVAL_TRIGGER_ENABLED=config.get('PY_EVAL_TRIGGER_ENABLED', False)
     AGENT_NAME=config.get('AGENT_NAME', 'faust')
     SECURITY_VERIFIER_LLM_API_ENDPOINT = config.get('SECURITY_VERIFIER_API_ENDPOINT', 'https://www.dmxapi.cn/v1')

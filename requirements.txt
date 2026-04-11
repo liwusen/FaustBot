@@ -32,6 +32,7 @@ nano-vectordb
 
 #Langchain
 langchain==1.2.7
+langchain-openai
 langchain-deepseek==1.0.1
 langchain-community==0.4.1
 wikipedia==1.4.0
