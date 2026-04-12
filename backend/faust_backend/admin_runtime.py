@@ -44,6 +44,25 @@ PUBLIC_CONFIG_DEFAULTS = {
     "LIVE2D_MODEL_Y": None,
     "FRONTEND_CLICK_THROUGH": True,
     "FRONTEND_DEFAULT_TTS_LANG": "zh",
+    "TTS_MODE": "local",
+    "ASR_MODE": "local",
+    "OPENAI_TTS_BASE_URL": "https://api.openai.com/v1",
+    "OPENAI_TTS_MODEL": "gpt-4o-mini-tts",
+    "OPENAI_TTS_VOICE": "alloy",
+    "OPENAI_TTS_RESPONSE_FORMAT": "mp3",
+    "OPENAI_TTS_SPEED": 1.0,
+    "OPENAI_TTS_INSTRUCTIONS": "",
+    "OPENAI_ASR_BASE_URL": "https://api.openai.com/v1",
+    "OPENAI_ASR_MODEL": "gpt-4o-transcribe",
+    "OPENAI_ASR_LANGUAGE": "",
+    "OPENAI_ASR_PROMPT": "",
+    "OPENAI_ASR_RESPONSE_FORMAT": "json",
+    "OPENAI_ASR_TEMPERATURE": 0.0,
+    "OPENAI_ASR_TIMESTAMP_GRANULARITIES": "",
+    "OPENAI_ASR_ENERGY_THRESHOLD": 0.02,
+    "OPENAI_ASR_SILENCE_MS": 700,
+    "OPENAI_ASR_MIN_SPEECH_MS": 250,
+    "OPENAI_ASR_PREROLL_MS": 250,
     # TTS 参考音频配置
     "TTS_REFER_WAV_PATH": "",
     "TTS_PROMPT_TEXT": "",
@@ -55,6 +74,8 @@ PRIVATE_CONFIG_DEFAULTS = {
     "GUI_OPERATOR_LLM_KEY": "",
     "SECURITY_VERIFIER_LLM_KEY": "",
     "RAG_OPENAI_API_KEY": "",
+    "OPENAI_TTS_API_KEY": "",
+    "OPENAI_ASR_API_KEY": "",
 }
 
 _AGENT_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -147,6 +168,7 @@ def save_config(payload: Dict[str, Any]) -> Dict[str, Any]:
     private_cfg.pop("DEEPSEEK_API_KEY", None)
 
     for key, value in public_in.items():
+        skey = str(key)
         public_cfg[skey] = value
 
 

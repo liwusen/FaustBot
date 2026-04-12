@@ -34,6 +34,10 @@ def load_configs():
     global GUI_OPERATOR_LLM_MODEL, GUI_OPERATOR_LLM_BASE, CHAT_MODEL, CHAT_API_BASE, PT_EVAL_TRIGGER_ENABLED, AGENT_NAME
     global SECURITY_VERIFIER_LLM_API_ENDPOINT, SECURITY_VERIFIER_LLM_MODEL, SECURITY_SYS_ENABLED, AGENT_ROOT
     global RAG_ENABLED, RAG_API_URL, RAG_LLM_BASE_URL, RAG_CHAT_MODEL, RAG_EMBED_MODEL, RAG_EMBED_DIM, RAG_EMBED_MAX_TOKEN_SIZE, RAG_AUTO_INDEX_RECORD
+    global TTS_MODE, ASR_MODE, OPENAI_TTS_BASE_URL, OPENAI_TTS_MODEL, OPENAI_TTS_VOICE, OPENAI_TTS_RESPONSE_FORMAT, OPENAI_TTS_SPEED, OPENAI_TTS_INSTRUCTIONS
+    global OPENAI_ASR_BASE_URL, OPENAI_ASR_MODEL, OPENAI_ASR_LANGUAGE, OPENAI_ASR_PROMPT, OPENAI_ASR_RESPONSE_FORMAT, OPENAI_ASR_TEMPERATURE, OPENAI_ASR_TIMESTAMP_GRANULARITIES
+    global OPENAI_ASR_ENERGY_THRESHOLD, OPENAI_ASR_SILENCE_MS, OPENAI_ASR_MIN_SPEECH_MS, OPENAI_ASR_PREROLL_MS
+    global OPENAI_TTS_API_KEY, OPENAI_ASR_API_KEY
     _ensure_private_config_exists()
     with open(CONFIG_FILE_P_PATH, 'r', encoding='utf-8') as f:
         private_config = json.load(f)
@@ -46,6 +50,8 @@ def load_configs():
     GUI_OPERATOR_LLM_KEY = private_config.get('GUI_OPERATOR_LLM_KEY', '')
     SECURITY_VERIFIER_LLM_KEY = private_config.get('SECURITY_VERIFIER_LLM_KEY', '')
     RAG_OPENAI_API_KEY = private_config.get('RAG_OPENAI_API_KEY', private_config.get('RAG_OPENAI_KEY', ''))
+    OPENAI_TTS_API_KEY = private_config.get('OPENAI_TTS_API_KEY', CHAT_API_KEY)
+    OPENAI_ASR_API_KEY = private_config.get('OPENAI_ASR_API_KEY', CHAT_API_KEY)
 
     GUI_OPERATOR_LLM_MODEL = config.get('GUI_OPERATOR_LLM_MODEL', 'gui-plus')
     GUI_OPERATOR_LLM_BASE = config.get('GUI_OPERATOR_LLM_BASE', 'https://www.dmxapi.cn/v1/chat/completions')
@@ -64,6 +70,25 @@ def load_configs():
     RAG_EMBED_DIM = int(config.get('RAG_EMBED_DIM', 1536) or 1536)
     RAG_EMBED_MAX_TOKEN_SIZE = int(config.get('RAG_EMBED_MAX_TOKEN_SIZE', 8192) or 8192)
     RAG_AUTO_INDEX_RECORD = config.get('RAG_AUTO_INDEX_RECORD', True)
+    TTS_MODE = str(config.get('TTS_MODE', 'local') or 'local').strip().lower()
+    ASR_MODE = str(config.get('ASR_MODE', 'local') or 'local').strip().lower()
+    OPENAI_TTS_BASE_URL = str(config.get('OPENAI_TTS_BASE_URL', 'https://api.openai.com/v1') or 'https://api.openai.com/v1').strip()
+    OPENAI_TTS_MODEL = str(config.get('OPENAI_TTS_MODEL', 'gpt-4o-mini-tts') or 'gpt-4o-mini-tts').strip()
+    OPENAI_TTS_VOICE = str(config.get('OPENAI_TTS_VOICE', 'alloy') or 'alloy').strip()
+    OPENAI_TTS_RESPONSE_FORMAT = str(config.get('OPENAI_TTS_RESPONSE_FORMAT', 'mp3') or 'mp3').strip()
+    OPENAI_TTS_SPEED = float(config.get('OPENAI_TTS_SPEED', 1.0) or 1.0)
+    OPENAI_TTS_INSTRUCTIONS = str(config.get('OPENAI_TTS_INSTRUCTIONS', '') or '')
+    OPENAI_ASR_BASE_URL = str(config.get('OPENAI_ASR_BASE_URL', 'https://api.openai.com/v1') or 'https://api.openai.com/v1').strip()
+    OPENAI_ASR_MODEL = str(config.get('OPENAI_ASR_MODEL', 'gpt-4o-transcribe') or 'gpt-4o-transcribe').strip()
+    OPENAI_ASR_LANGUAGE = str(config.get('OPENAI_ASR_LANGUAGE', '') or '').strip()
+    OPENAI_ASR_PROMPT = str(config.get('OPENAI_ASR_PROMPT', '') or '')
+    OPENAI_ASR_RESPONSE_FORMAT = str(config.get('OPENAI_ASR_RESPONSE_FORMAT', 'json') or 'json').strip()
+    OPENAI_ASR_TEMPERATURE = float(config.get('OPENAI_ASR_TEMPERATURE', 0.0) or 0.0)
+    OPENAI_ASR_TIMESTAMP_GRANULARITIES = str(config.get('OPENAI_ASR_TIMESTAMP_GRANULARITIES', '') or '').strip()
+    OPENAI_ASR_ENERGY_THRESHOLD = float(config.get('OPENAI_ASR_ENERGY_THRESHOLD', 0.02) or 0.02)
+    OPENAI_ASR_SILENCE_MS = int(config.get('OPENAI_ASR_SILENCE_MS', 700) or 700)
+    OPENAI_ASR_MIN_SPEECH_MS = int(config.get('OPENAI_ASR_MIN_SPEECH_MS', 250) or 250)
+    OPENAI_ASR_PREROLL_MS = int(config.get('OPENAI_ASR_PREROLL_MS', 250) or 250)
     
     # TTS 参考音频配置
     TTS_REFER_WAV_PATH = config.get('TTS_REFER_WAV_PATH', '')

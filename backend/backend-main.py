@@ -1,7 +1,8 @@
 print("[main]Starting")
-from fastapi import FastAPI,WebSocket, WebSocketDisconnect, HTTPException, Query
+from fastapi import FastAPI,WebSocket, WebSocketDisconnect, HTTPException, Query, UploadFile, File
 import json
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 import uvicorn
 from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
@@ -32,6 +33,7 @@ import faust_backend.service_manager as service_manager
 import faust_backend.rag_client as rag_client
 import faust_backend.plugin_market as plugin_market
 import faust_backend.skill_manager as skill_manager
+import faust_backend.speech_runtime as speech_runtime
 from faust_backend.plugin_system import PluginManager
 import tqdm
 from os.path import join as pjoin
@@ -84,6 +86,12 @@ def startServices():
     if not args.no_run_other_backend_services:
         print("[main] Starting backend services...")
         for service in tqdm.tqdm(service_manager.get_service_keys(), desc="[main]Starting services"):
+            if service == "tts" and not speech_runtime.should_start_local_tts():
+                print("[main] Skip local TTS service because TTS_MODE is not local.")
+                continue
+            if service == "asr" and not speech_runtime.should_start_local_asr():
+                print("[main] Skip local ASR service because ASR_MODE is not local.")
+                continue
             try:
                 service_manager.start_service(service, wait=False)
             except Exception as e:
@@ -1226,6 +1234,52 @@ async def nimble_close_post(payload: dict):
     backend2frontend.FrontEndCloseNimbleWindow({"callback_id": callback_id, "reason": reason})
     nimble.cleanup_nimble_session(callback_id)
     return {"status": "closed", "callback_id": callback_id}
+
+
+@app.get("/faust/audio/config")
+async def speech_config_get():
+    conf.reload_configs()
+    return {"status": "ok", "config": speech_runtime.frontend_speech_config()}
+
+
+@app.post("/faust/audio/tts")
+async def speech_tts_post(payload: dict):
+    text = ""
+    lang = None
+    if isinstance(payload, dict):
+        text = str(payload.get("text") or "").strip()
+        lang = payload.get("lang") or payload.get("text_language")
+    if not text:
+        raise HTTPException(status_code=400, detail="缺少 TTS 文本")
+
+    conf.reload_configs()
+    try:
+        audio_bytes, content_type = await asyncio.to_thread(speech_runtime.synthesize_tts, text, lang)
+        return Response(content=audio_bytes, media_type=content_type)
+    except speech_runtime.SpeechRuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"TTS 代理失败: {e}")
+
+
+@app.post("/faust/audio/asr")
+async def speech_asr_post(file: UploadFile = File(...)):
+    conf.reload_configs()
+    try:
+        audio_bytes = await file.read()
+        result = await asyncio.to_thread(
+            speech_runtime.transcribe_audio,
+            file.filename or "audio.wav",
+            audio_bytes,
+            file.content_type or "audio/wav",
+        )
+        return result
+    except speech_runtime.SpeechRuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"ASR 代理失败: {e}")
+
+
 @app.post("/faust/status")
 async def status_post():
     """Returns JSON {'status': 'ok'} to indicate the service is running."""

@@ -391,22 +391,131 @@
   const ASR_UPLOAD_INTERVAL_MS = 1200; // 每隔 ~1.2s 上传一段音频
   const TARGET_SAMPLE_RATE = 16000;
   let asrTimer = null;
-  const ASR_ENDPOINT = 'http://127.0.0.1:1000/v1/upload_audio';
+  const BACKEND_HOST = '127.0.0.1';
+  const BACKEND_PORT = 13900;
+  const ASR_ENDPOINT = `http://${BACKEND_HOST}:${BACKEND_PORT}/faust/audio/asr`;
+  const TTS_ENDPOINT = `http://${BACKEND_HOST}:${BACKEND_PORT}/faust/audio/tts`;
+  const SPEECH_CONFIG_ENDPOINT = `http://${BACKEND_HOST}:${BACKEND_PORT}/faust/audio/config`;
   // VAD websocket state
   const VAD_WS_URL = 'ws://127.0.0.1:1000/v1/ws/vad';
   let vadWs = null;
   let useVAD = true; // try to use websocket VAD by default
   const VAD_WINDOW_SIZE = 512; // must match backend WINDOW_SIZE
+  let speechRuntimeConfig = {
+    tts_mode: 'local',
+    asr_mode: 'local',
+    asr_detection_mode: 'vad',
+    frontend_default_tts_lang: 'zh',
+    openai_asr_energy_threshold: 0.02,
+    openai_asr_silence_ms: 700,
+    openai_asr_min_speech_ms: 250,
+    openai_asr_preroll_ms: 250,
+  };
   // streaming buffers: leftover resampled samples, pre-roll frames, and current speech frames
   let leftoverResampled = new Float32Array(0);
   let preBufferFrames = []; // small ring of recent frames to include as pre-roll
-  const PRE_ROLL_FRAMES = 8; // each frame is 512 samples -> ~0.256s at 16k
+  let preRollFrameLimit = 8; // each frame is 512 samples -> ~0.256s at 16k
   let uploadFrames = []; // frames collected during speech
   let inSpeech = false;
   let vadEndTimer = null;
   let noVoiceCnt=0;
+  let speechFrameCnt = 0;
+  let silenceFrameLimit = 22;
+  let minSpeechFrameLimit = 8;
   const VAD_END_DEBOUNCE_MS = 300;
   loadSavedModelState();
+
+  function applySpeechRuntimeConfig(config){
+    speechRuntimeConfig = Object.assign({}, speechRuntimeConfig, config || {});
+    const frameMs = (VAD_WINDOW_SIZE / TARGET_SAMPLE_RATE) * 1000;
+    preRollFrameLimit = Math.max(1, Math.ceil((Number(speechRuntimeConfig.openai_asr_preroll_ms) || 250) / frameMs));
+    silenceFrameLimit = Math.max(1, Math.ceil((Number(speechRuntimeConfig.openai_asr_silence_ms) || 700) / frameMs));
+    minSpeechFrameLimit = Math.max(1, Math.ceil((Number(speechRuntimeConfig.openai_asr_min_speech_ms) || 250) / frameMs));
+    useVAD = speechRuntimeConfig.asr_detection_mode === 'vad';
+    if (ttsLang && speechRuntimeConfig.frontend_default_tts_lang){
+      ttsLang.value = speechRuntimeConfig.frontend_default_tts_lang;
+    }
+  }
+
+  async function refreshSpeechRuntimeConfig(force = false){
+    if (!force && speechRuntimeConfig && speechRuntimeConfig._loaded) return speechRuntimeConfig;
+    try{
+      const r = await fetch(SPEECH_CONFIG_ENDPOINT);
+      const j = await r.json().catch(()=>({}));
+      if (!r.ok || !j || j.error){
+        throw new Error((j && (j.detail || j.error)) || `HTTP ${r.status}`);
+      }
+      applySpeechRuntimeConfig(Object.assign({}, j.config || {}, { _loaded: true }));
+    }catch(e){
+      console.warn('load speech config failed, fallback to defaults', e);
+      applySpeechRuntimeConfig(Object.assign({}, speechRuntimeConfig, { _loaded: true }));
+    }
+    return speechRuntimeConfig;
+  }
+
+  function getCurrentTtsLang(){
+    return (speechRuntimeConfig && speechRuntimeConfig.frontend_default_tts_lang) || ((ttsLang && ttsLang.value) ? ttsLang.value : 'zh');
+  }
+
+  function updateSpeechProbabilityUi(probability){
+    try{
+      const clamped = Math.max(0, Math.min(1, Number(probability) || 0));
+      if (vadProbEl) vadProbEl.value = clamped;
+      if (vadProbLabel) vadProbLabel.textContent = Math.round(clamped * 100) + '%';
+    }catch(e){}
+  }
+
+  function finalizeSpeechSegment(probability){
+    inSpeech = false;
+    vadEndTimer = null;
+    const spokenEnough = speechFrameCnt >= minSpeechFrameLimit;
+    speechFrameCnt = 0;
+    if (!spokenEnough){
+      uploadFrames = [];
+      asrStatusEl.textContent = '语音过短，已忽略';
+      return;
+    }
+    asrStatusEl.textContent = '上传识别中...';
+    if (uploadFrames.length > 0){
+      const concat = concatFloat32Arrays(uploadFrames);
+      uploadFrames = [];
+      console.log('Uploading detected speech segment, length:', concat.length, 'probability:', probability);
+      uploadBufferAndShowResult(concat, TARGET_SAMPLE_RATE);
+    }
+  }
+
+  function handleSpeechActivity(active, probability){
+    updateSpeechProbabilityUi(probability);
+    if (active){
+      noVoiceCnt = 0;
+      speechFrameCnt += 1;
+      asrStatusEl.textContent = speechRuntimeConfig.asr_detection_mode === 'energy' ? '能量检测到语音...' : '检测到语音...';
+      if (!inSpeech){
+        inSpeech = true;
+        speechFrameCnt = 1;
+        uploadFrames = preBufferFrames.slice();
+        preBufferFrames = [];
+        asrStatusEl.textContent = '开始录音...';
+      }
+      if (vadEndTimer){ clearTimeout(vadEndTimer); vadEndTimer = null; }
+      return;
+    }
+
+    noVoiceCnt += 1;
+    asrStatusEl.textContent = speechRuntimeConfig.asr_detection_mode === 'energy' ? '等待语音...' : '没有语音';
+    if (inSpeech && noVoiceCnt >= silenceFrameLimit && !vadEndTimer){
+      vadEndTimer = setTimeout(()=> finalizeSpeechSegment(probability), VAD_END_DEBOUNCE_MS);
+    }
+  }
+
+  function detectFrameEnergy(frame){
+    let sumSquares = 0;
+    for (let i = 0; i < frame.length; i++) sumSquares += frame[i] * frame[i];
+    const rms = Math.sqrt(sumSquares / Math.max(1, frame.length));
+    const threshold = Math.max(1e-4, Number(speechRuntimeConfig.openai_asr_energy_threshold) || 0.02);
+    const probability = Math.max(0, Math.min(1, rms / threshold));
+    return { active: rms >= threshold, probability };
+  }
   // convert Float32Array -> Int16 WAV blob at TARGET_SAMPLE_RATE
   function interleaveAndEncodeWav(float32Array, inputSampleRate){
     // resample to TARGET_SAMPLE_RATE
@@ -520,8 +629,8 @@
   //console.log("ASR Result:", asrResult);
   //return;
   // --- Chat via WebSocket to backend (/faust/chat) ---
-  const CHAT_HOST = '127.0.0.1';
-  const CHAT_PORT = 13900;
+  const CHAT_HOST = BACKEND_HOST;
+  const CHAT_PORT = BACKEND_PORT;
   const CHAT_ENDPOINT = `ws://${CHAT_HOST}:${CHAT_PORT}/faust/chat`;
   const NIMBLE_CALLBACK_ENDPOINT = `http://${CHAT_HOST}:${CHAT_PORT}/faust/nimble/callback`;
   const NIMBLE_CLOSE_ENDPOINT = `http://${CHAT_HOST}:${CHAT_PORT}/faust/nimble/close`;
@@ -596,11 +705,12 @@
       } else if (cmd === 'SAY'){
         if (!arg) return;
         // use existing synthesizeAndPlay TTS function; prefer UI-selected lang
-        const lang = (ttsLang && ttsLang.value) ? ttsLang.value : 'zh-CN';
-        useVAD=false; // disable VAD during TTS playback
+        const lang = getCurrentTtsLang();
+        const shouldRestoreVAD = speechRuntimeConfig.asr_detection_mode === 'vad';
+        useVAD = false;
         showResultBubble('ai', arg);
         await synthesizeAndPlay(arg, lang);
-        useVAD=true; // re-enable VAD after TTS playback
+        useVAD = shouldRestoreVAD;
       } else if (cmd === 'STOP'){
         // stop audio and optionally stop asr
         try{ stopAudio(); }catch(e){}
@@ -743,9 +853,8 @@
 
   async function requestTtsBlob(text, lang){
     if (!text || !text.trim()) return null;
-    const endpoint = (window.location && window.location.hostname) ? `http://${window.location.hostname}:5000/` : 'http://127.0.0.1:5000/';
-    const payload = { text, text_language: lang || 'zh' };
-    const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const payload = { text, text_language: lang || getCurrentTtsLang(), lang: lang || getCurrentTtsLang() };
+    const r = await fetch(TTS_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     if (!r.ok){
       const txt = await r.text();
       throw new Error(`TTS服务错误: ${r.status} ${txt}`);
@@ -843,7 +952,7 @@
       console.log("收到增量回复，当前累计文本：", currentChatRequest.replyText);
       for (const sentence of split.completed){
         if (!sentence.includes('<NO_TTS_OUTPUT>')){
-          enqueueStreamTtsSentence(sentence, 'zh');
+          enqueueStreamTtsSentence(sentence, getCurrentTtsLang());
         }
       }
       return;
@@ -854,7 +963,7 @@
       const request = currentChatRequest;
       currentChatRequest.replyText = reply;
       if (currentChatRequest.pendingBuffer && currentChatRequest.pendingBuffer.trim() && !reply.includes('<NO_TTS_OUTPUT>')){
-        await enqueueStreamTtsSentence(currentChatRequest.pendingBuffer.trim(), 'zh');
+        await enqueueStreamTtsSentence(currentChatRequest.pendingBuffer.trim(), getCurrentTtsLang());
       }
       currentChatRequest.pendingBuffer = '';
       if (chatStatusEl) chatStatusEl.textContent = '聊天完成';
@@ -1032,6 +1141,7 @@
   async function startMicAsr(){
     if (asrRunning) return;
     try{
+      await refreshSpeechRuntimeConfig(true);
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       micStream = stream;
       micAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -1058,21 +1168,24 @@
         let offset = 0;
         while (combined.length - offset >= VAD_WINDOW_SIZE){
           const frame = combined.subarray(offset, offset + VAD_WINDOW_SIZE);
-          // send to VAD websocket if available
-          try{
-            if (vadWs && vadWs.readyState === WebSocket.OPEN && useVAD){
-              // send exactly the slice bytes for this frame (avoid sending whole underlying buffer)
-              console.log("Sending VAD frame");
-              const start = frame.byteOffset || 0;
-              const end = start + (frame.byteLength || frame.length * 4);
-              const slice = frame.buffer.slice(start, end);
-              vadWs.send(slice);
+          if (!useVAD){
+            const energy = detectFrameEnergy(frame);
+            handleSpeechActivity(energy.active, energy.probability);
+          } else {
+            try{
+              if (vadWs && vadWs.readyState === WebSocket.OPEN){
+                const start = frame.byteOffset || 0;
+                const end = start + (frame.byteLength || frame.length * 4);
+                const slice = frame.buffer.slice(start, end);
+                vadWs.send(slice);
+              }
+            }catch(e){
+              console.log("fail to send VAD frame:", e);
             }
-          }catch(e){
-            console.log("fail to send VAD frame:", e) /* ignore send errors */ }
+          }
           // maintain pre-roll ring buffer
           preBufferFrames.push(frame.slice(0));
-          if (preBufferFrames.length > PRE_ROLL_FRAMES) preBufferFrames.shift();
+          if (preBufferFrames.length > preRollFrameLimit) preBufferFrames.shift();
           // if speech active, also collect into uploadFrames
           if (inSpeech) uploadFrames.push(frame.slice(0));
           offset += VAD_WINDOW_SIZE;
@@ -1092,7 +1205,8 @@
   updateQuickAsrButton();
       // try to open VAD websocket if enabled
       noVoiceCnt=0;
-      if (true){
+      speechFrameCnt = 0;
+      if (speechRuntimeConfig.asr_detection_mode === 'vad'){
         try{
           vadWs = new WebSocket(VAD_WS_URL);
           vadWs.binaryType = 'arraybuffer';
@@ -1102,65 +1216,15 @@
               const msg = typeof ev.data === 'string' ? JSON.parse(ev.data) : JSON.parse(new TextDecoder().decode(ev.data));
               // prefer probability for decisions; fall back to is_speech if probability missing
               const p = (typeof msg.probability !== 'undefined') ? (Number(msg.probability) || 0) : (msg.is_speech ? 1 : 0);
-              // update realtime probability UI if present
-              try{
-                if (vadProbEl) vadProbEl.value = Math.max(0, Math.min(1, p));
-                if (vadProbLabel) vadProbLabel.textContent = Math.round(p*100) + '%';
-              }catch(e){}
-
-              // New logic: start recording when probability > 50%, stop when < 50%
-              // We still use a debounce timer (VAD_END_DEBOUNCE_MS) to avoid flapping when dropping below threshold.
-              const START_THRESHOLD = 0.5;
-              const STOP_THRESHOLD = 0.5;
-              const STOP_NO_VOICE_COUNT = 30;
-              console.log("VAD prob:", p);
-              console.log("In Speech:", inSpeech);
-              console.log("No Voice Count:", noVoiceCnt);
-              if (p > START_THRESHOLD){
-                // speech started or continuing
-                asrStatusEl.textContent = '有语音喵';
-                noVoiceCnt=0;
-                if (!inSpeech){
-                  inSpeech = true;
-                  // include pre-roll frames collected earlier
-                  uploadFrames = preBufferFrames.slice();
-                  preBufferFrames = [];
-                  asrStatusEl.textContent = '检测到语音-开始录音...';
-                }
-                // cancel pending end timer if any
-                if (vadEndTimer){ clearTimeout(vadEndTimer); vadEndTimer = null; }
-              }
-              if (p < STOP_THRESHOLD){
-                // probability dropped below stop threshold
-                asrStatusEl.textContent = '没有语音喵';
-                noVoiceCnt+=1;
-                if (inSpeech && noVoiceCnt>=STOP_NO_VOICE_COUNT){
-                  console.log("VAD end detected, starting debounce timer");
-                  //if (vadEndTimer) clearTimeout(vadEndTimer);
-                  vadEndTimer = setTimeout(()=>{
-                    // consider speech ended
-                    inSpeech = false;
-                    vadEndTimer = null;
-                    asrStatusEl.textContent = '没有语音喵-上传识别中...';
-                    if (uploadFrames.length > 0){
-                      const concat = concatFloat32Arrays(uploadFrames);
-                      uploadFrames = [];
-                      console.log("Uploading detected speech segment, length:", concat.length);
-                      console.log("Probability:", p);
-                      uploadBufferAndShowResult(concat, TARGET_SAMPLE_RATE);
-                    }
-                  }, VAD_END_DEBOUNCE_MS);
-                }
-              } // else p == threshold: treat as no change
+              handleSpeechActivity(p > 0.5, p);
             }catch(err){ console.warn('VAD ws message parse err', err); }
           };
           vadWs.onerror = (ev)=>{ console.warn('VAD ws error', ev); useVAD = false; asrStatusEl.textContent = 'VAD连接错误'; vadWs = null; };
           vadWs.onclose = ()=>{ if (useVAD){ useVAD = false; asrStatusEl.textContent = 'VAD断开'; vadWs = null; } };
         }catch(e){ console.warn('open vad ws failed', e); useVAD = false; }
       } else {
-        // VAD disabled: do not fall back to periodic uploads. ASR will not
-        // collect audio for periodic upload — rely on manual control or
-        // re-enable VAD.
+        useVAD = false;
+        asrStatusEl.textContent = '已启用能量检测';
       }
     }catch(err){
       console.error('start mic failed', err);
@@ -1171,6 +1235,9 @@
   function stopMicAsr(){
     if (!asrRunning) return;
     asrRunning = false;
+    inSpeech = false;
+    speechFrameCnt = 0;
+    noVoiceCnt = 0;
     if (asrTimer) { clearInterval(asrTimer); asrTimer = null; }
     if (vadEndTimer){ clearTimeout(vadEndTimer); vadEndTimer = null; }
     // if we have collected frames in uploadFrames (speech not yet sent), send them
@@ -1188,6 +1255,8 @@
     if (micAudioCtx){ try{ micAudioCtx.close(); }catch(e){} micAudioCtx=null }
     if (micStream){ micStream.getTracks().forEach(t => t.stop()); micStream = null }
     micBuffer = []; micBufLen = 0;
+    preBufferFrames = [];
+    leftoverResampled = new Float32Array(0);
     asrStatusEl.textContent = '已停止';
     startAsrBtn.disabled = false;
     stopAsrBtn.disabled = true;
@@ -1383,6 +1452,7 @@
   // 自动尝试加载默认或保存的模型路径/状态
   modelPathInput.value = defaultModel;
   (async ()=>{
+    await refreshSpeechRuntimeConfig(true);
     const st = await loadModelState();
     const toLoad = (st && st.modelPath) ? st.modelPath : defaultModel;
     modelPathInput.value = toLoad;
@@ -1551,7 +1621,7 @@
     // resolves after all playback has finished.
     if (!text || text.trim().length === 0) return;
     const TTS_SPLIT_LIMIT = 100; // characters per chunk (tunable)
-    const endpoint = (window.location && window.location.hostname) ? `http://${window.location.hostname}:5000/` : 'http://127.0.0.1:5000/';
+    const endpoint = TTS_ENDPOINT;
 
     // helper: split text into chunks trying to respect sentence boundaries
     function splitText(input, maxLen){
@@ -1631,7 +1701,7 @@
     for (let i=0;i<chunks.length;i++){ waiters[i] = makeWaiter(); blobs[i] = null; }
 
     const fetchPromises = chunks.map((chunk, i) => (async ()=>{
-      const payload = { text: chunk, text_language: lang || 'zh' };
+      const payload = { text: chunk, text_language: lang || getCurrentTtsLang(), lang: lang || getCurrentTtsLang() };
       try{
         const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         if (!r.ok){
