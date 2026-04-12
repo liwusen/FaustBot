@@ -64,6 +64,33 @@ LIVE2D_KEYS = [
     "FRONTEND_CLICK_THROUGH",
     "FRONTEND_DEFAULT_TTS_LANG",
 ]
+SPEECH_PUBLIC_KEYS = [
+    "TTS_MODE",
+    "ASR_MODE",
+    "OPENAI_TTS_BASE_URL",
+    "OPENAI_TTS_MODEL",
+    "OPENAI_TTS_VOICE",
+    "OPENAI_TTS_RESPONSE_FORMAT",
+    "OPENAI_TTS_SPEED",
+    "OPENAI_TTS_INSTRUCTIONS",
+    "OPENAI_ASR_BASE_URL",
+    "OPENAI_ASR_MODEL",
+    "OPENAI_ASR_LANGUAGE",
+    "OPENAI_ASR_PROMPT",
+    "OPENAI_ASR_RESPONSE_FORMAT",
+    "OPENAI_ASR_TEMPERATURE",
+    "OPENAI_ASR_TIMESTAMP_GRANULARITIES",
+]
+OBSOLETE_SPEECH_PUBLIC_KEYS = {
+    "OPENAI_ASR_ENERGY_THRESHOLD",
+    "OPENAI_ASR_SILENCE_MS",
+    "OPENAI_ASR_MIN_SPEECH_MS",
+    "OPENAI_ASR_PREROLL_MS",
+}
+SPEECH_PRIVATE_KEYS = [
+    "OPENAI_TTS_API_KEY",
+    "OPENAI_ASR_API_KEY",
+]
 TTS_KEYS = [
     "TTS_REFER_WAV_PATH",
     "TTS_PROMPT_TEXT", 
@@ -72,8 +99,19 @@ TTS_KEYS = [
 AGENT_FILES = ["AGENT.md", "ROLE.md", "COREMEMORY.md", "TASK.md"]
 
 # 不在 AI Provider 区域重复展示的 public 配置键（这些键在其他 tab 中展示）。
-PUBLIC_PROVIDER_EXCLUDE_KEYS = set(LIVE2D_KEYS + TTS_KEYS)
+PUBLIC_PROVIDER_EXCLUDE_KEYS = set(LIVE2D_KEYS + TTS_KEYS + SPEECH_PUBLIC_KEYS) | OBSOLETE_SPEECH_PUBLIC_KEYS
 PUBLIC_PROVIDER_EXCLUDE_KEYS.add("PLUGIN_MARKET_INDEX_URL")
+PRIVATE_PROVIDER_EXCLUDE_KEYS = set(SPEECH_PRIVATE_KEYS)
+
+FIELD_OPTIONS = {
+    "TTS_MODE": ["local", "openai"],
+    "ASR_MODE": ["local", "openai"],
+    "FRONTEND_DEFAULT_TTS_LANG": ["zh", "en", "ja", "ko", "yue"],
+    "OPENAI_TTS_VOICE": ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"],
+    "OPENAI_TTS_RESPONSE_FORMAT": ["mp3", "wav", "opus", "aac", "flac", "pcm"],
+    "OPENAI_ASR_RESPONSE_FORMAT": ["json", "text", "srt", "verbose_json", "vtt"],
+    "TTS_PROMPT_LANGUAGE": ["zh", "en", "ja", "ko", "yue", "中文", "英文", "日文", "韩文", "粤语"],
+}
 
 
 @dataclass
@@ -214,6 +252,8 @@ class ConfigerWindow(QMainWindow):
         self.public_fields: Dict[str, FieldWidget] = {}
         self.private_fields: Dict[str, FieldWidget] = {}
         self.live2d_fields: Dict[str, FieldWidget] = {}
+        self.speech_public_fields: Dict[str, FieldWidget] = {}
+        self.speech_private_fields: Dict[str, FieldWidget] = {}
         self.agent_file_edits: Dict[str, QPlainTextEdit] = {}
         self.plugin_config_fields: Dict[str, FieldWidget] = {}
 
@@ -265,6 +305,7 @@ class ConfigerWindow(QMainWindow):
         self._build_provider_tab()
         self._build_agent_tab()
         self._build_live2d_tab()
+        self._build_speech_tab()
         self._build_rag_tab()
         self._build_runtime_tab()
         self._build_trigger_tab()
@@ -314,6 +355,27 @@ class ConfigerWindow(QMainWindow):
         self.live2d_form = QFormLayout(group)
         layout.addWidget(group)
 
+        self.model_list = QListWidget()
+        layout.addWidget(QLabel("可用模型"))
+        layout.addWidget(self.model_list, 1)
+
+        self.model_list.itemDoubleClicked.connect(self._apply_selected_model_path)
+        self.tabs.addTab(tab, "Live2D")
+
+    def _build_speech_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        speech_group = QGroupBox("语音模式与 OpenAI 配置")
+        speech_layout = QHBoxLayout(speech_group)
+        self.speech_public_box = QGroupBox("公开语音配置")
+        self.speech_public_form = QFormLayout(self.speech_public_box)
+        self.speech_private_box = QGroupBox("语音 API Keys")
+        self.speech_private_form = QFormLayout(self.speech_private_box)
+        speech_layout.addWidget(self.speech_public_box, 2)
+        speech_layout.addWidget(self.speech_private_box, 1)
+        layout.addWidget(speech_group)
+
         # TTS 参考音频配置
         tts_group = QGroupBox("TTS参考音频配置")
         tts_form = QFormLayout(tts_group)
@@ -337,7 +399,7 @@ class ConfigerWindow(QMainWindow):
         
         # 语言选择
         self.tts_prompt_language_combo = QComboBox()
-        self.tts_prompt_language_combo.addItems(["zh", "en", "ja", "ko", "yue", "中文", "英文", "日文", "韩文", "粤语"])
+        self.tts_prompt_language_combo.addItems(FIELD_OPTIONS["TTS_PROMPT_LANGUAGE"])
         tts_form.addRow("语言", self.tts_prompt_language_combo)
         
         # 应用更改按钮
@@ -346,13 +408,8 @@ class ConfigerWindow(QMainWindow):
         tts_form.addRow("", self.tts_apply_btn)
         
         layout.addWidget(tts_group)
-
-        self.model_list = QListWidget()
-        layout.addWidget(QLabel("可用模型"))
-        layout.addWidget(self.model_list, 1)
-
-        self.model_list.itemDoubleClicked.connect(self._apply_selected_model_path)
-        self.tabs.addTab(tab, "Live2D")
+        layout.addStretch(1)
+        self.tabs.addTab(tab, "语音控制")
 
     def _build_agent_tab(self):
         tab = QWidget()
@@ -718,6 +775,16 @@ class ConfigerWindow(QMainWindow):
 
     def _widget_from_value(self, key: str, value: Any) -> FieldWidget:
         value_type = type(value).__name__
+        if key in FIELD_OPTIONS:
+            w = QComboBox()
+            options = [str(item) for item in FIELD_OPTIONS[key]]
+            current = "" if value is None else str(value)
+            if current and current not in options:
+                options.append(current)
+            w.addItems(options)
+            if current:
+                w.setCurrentText(current)
+            return FieldWidget(key=key, widget=w, value_type="str")
         if isinstance(value, bool):
             w = QComboBox()
             w.addItems(["true", "false"])
@@ -801,9 +868,13 @@ class ConfigerWindow(QMainWindow):
         self._clear_form_layout(self.public_form)
         self._clear_form_layout(self.private_form)
         self._clear_form_layout(self.live2d_form)
+        self._clear_form_layout(self.speech_public_form)
+        self._clear_form_layout(self.speech_private_form)
         self.public_fields.clear()
         self.private_fields.clear()
         self.live2d_fields.clear()
+        self.speech_public_fields.clear()
+        self.speech_private_fields.clear()
 
         public_ordered_keys = []
         for key in PUBLIC_PROVIDER_KEYS:
@@ -824,7 +895,7 @@ class ConfigerWindow(QMainWindow):
 
         private_ordered_keys = []
         for key in PRIVATE_PROVIDER_KEYS:
-            if key in private_cfg:
+            if key in private_cfg and key not in PRIVATE_PROVIDER_EXCLUDE_KEYS:
                 private_ordered_keys.append(key)
         # 兼容老键显示：若后端仍返回 DEEPSEEK_API_KEY，则在UI中映射到 CHAT_API_KEY。
         if "CHAT_API_KEY" not in private_cfg and "DEEPSEEK_API_KEY" in private_cfg:
@@ -834,7 +905,7 @@ class ConfigerWindow(QMainWindow):
 
         extra_private = [
             k for k in private_cfg.keys()
-            if k not in private_ordered_keys and k != "DEEPSEEK_API_KEY"
+            if k not in private_ordered_keys and k != "DEEPSEEK_API_KEY" and k not in PRIVATE_PROVIDER_EXCLUDE_KEYS
         ]
         private_ordered_keys.extend(sorted(extra_private))
 
@@ -848,6 +919,18 @@ class ConfigerWindow(QMainWindow):
             self.live2d_fields[key] = field
             self.live2d_form.addRow(QLabel(key), field.widget)
 
+        for key in SPEECH_PUBLIC_KEYS:
+            field = self._widget_from_value(key, public_cfg.get(key))
+            self.speech_public_fields[key] = field
+            self.speech_public_form.addRow(QLabel(key), field.widget)
+            if isinstance(field.widget, QComboBox) and key in {"TTS_MODE", "ASR_MODE"}:
+                field.widget.currentTextChanged.connect(lambda _=None: self._refresh_speech_ui_state())
+
+        for key in SPEECH_PRIVATE_KEYS:
+            field = self._widget_from_value(key, private_cfg.get(key, ""))
+            self.speech_private_fields[key] = field
+            self.speech_private_form.addRow(QLabel(key), field.widget)
+
         # 加载 TTS 配置到界面
         self.tts_refer_wav_path_input.setText(public_cfg.get("TTS_REFER_WAV_PATH", ""))
         self.tts_prompt_text_input.setPlainText(public_cfg.get("TTS_PROMPT_TEXT", ""))
@@ -856,6 +939,21 @@ class ConfigerWindow(QMainWindow):
         idx = self.tts_prompt_language_combo.findText(lang)
         if idx >= 0:
             self.tts_prompt_language_combo.setCurrentIndex(idx)
+        self._refresh_speech_ui_state()
+
+    def _refresh_speech_ui_state(self):
+        tts_mode_field = self.speech_public_fields.get("TTS_MODE")
+        asr_mode_field = self.speech_public_fields.get("ASR_MODE")
+        tts_mode = self._field_value(tts_mode_field) if tts_mode_field else "local"
+        asr_mode = self._field_value(asr_mode_field) if asr_mode_field else "local"
+        using_local_tts = tts_mode == "local"
+        using_openai = tts_mode == "openai" or asr_mode == "openai"
+        self.tts_apply_btn.setEnabled(using_local_tts)
+        self.tts_browse_btn.setEnabled(using_local_tts)
+        self.tts_refer_wav_path_input.setEnabled(using_local_tts)
+        self.tts_prompt_text_input.setEnabled(using_local_tts)
+        self.tts_prompt_language_combo.setEnabled(using_local_tts)
+        self.speech_private_box.setEnabled(using_openai)
 
     def load_runtime_summary(self):
         data = self.api_request("GET", "/faust/admin/runtime")
@@ -1418,7 +1516,11 @@ class ConfigerWindow(QMainWindow):
             public_values = {k: self._field_value(v) for k, v in self.public_fields.items()}
             private_values = {k: self._field_value(v) for k, v in self.private_fields.items()}
             live2d_values = {k: self._field_value(v) for k, v in self.live2d_fields.items()}
+            speech_public_values = {k: self._field_value(v) for k, v in self.speech_public_fields.items()}
+            speech_private_values = {k: self._field_value(v) for k, v in self.speech_private_fields.items()}
             public_values.update(live2d_values)
+            public_values.update(speech_public_values)
+            private_values.update(speech_private_values)
             
             # 添加 TTS 配置
             public_values["TTS_REFER_WAV_PATH"] = self.tts_refer_wav_path_input.text().strip()
@@ -1444,6 +1546,9 @@ class ConfigerWindow(QMainWindow):
             
     def _apply_tts_refer(self):
         try:
+            if self.speech_public_fields.get("TTS_MODE") and self._field_value(self.speech_public_fields["TTS_MODE"]) != "local":
+                QMessageBox.information(self, "提示", "当前 TTS 模式不是 local，不能把参考音频应用到本地 TTS 服务。")
+                return
             refer_wav_path = self.tts_refer_wav_path_input.text().strip()
             prompt_text = self.tts_prompt_text_input.toPlainText().strip()
             prompt_language = self.tts_prompt_language_combo.currentText()

@@ -1,17 +1,14 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from funasr import AutoModel
 
 import torch
-import json
 import numpy as np
 import os
 import sys
 import re
 
 from datetime import datetime
-from queue import Queue
-from modelscope.hub.snapshot_download import snapshot_download
 
 # 保存原始的stdout和stderr
 original_stdout = sys.stdout
@@ -72,53 +69,18 @@ MODEL_DIR = os.path.join("asr-hub", "model")
 if not os.path.exists(MODEL_DIR):
     os.makedirs(MODEL_DIR)
 
-# 全局变量
-SAMPLE_RATE = 16000
-WINDOW_SIZE = 512
-VAD_THRESHOLD = 0.5
-
-# VAD状态
-vad_state = {
-    "is_running": False,
-    "active_websockets": set(),
-    "model": None,
-    "result_queue": Queue()
-}
-
 # 设置设备和数据类型
 device = "cuda" if torch.cuda.is_available() else "cpu"
 torch.set_default_dtype(torch.float32)
 
 # 初始化模型状态
 model_state = {
-    "vad_model": None,
     "asr_model": None,
     "punc_model": None
 }
 @app.on_event("startup")
 async def startup_event():
     print("正在加载模型...")
-
-    # 检查VAD模型目录是否存在
-    torch_hub_dir = os.path.join(MODEL_DIR, "torch_hub")
-    local_vad_path = os.path.join(torch_hub_dir, "snakers4_silero-vad_master")
-
-    try:
-        print("正在从本地加载VAD模型...")
-        model_state["vad_model"] = torch.hub.load(
-            repo_or_dir='snakers4/silero-vad',
-            model='silero_vad',
-            force_reload=False,
-            trust_repo=True,
-            onnx=True
-        )
-        # 解包模型（silero-vad的torch.hub.load返回元组 (model, example)）
-        vad_model_tuple = model_state["vad_model"]
-        model_state["vad_model"] = vad_model_tuple[0]  # 提取第一个元素（模型本体）
-        print("VAD模型加载完成")
-    except Exception as e:
-        print(f"VAD模型加载失败: {str(e)}")
-        raise e
 
     # 设置环境变量来指定模型下载位置
     asr_model_path = os.path.join(MODEL_DIR, "asr")
@@ -163,45 +125,6 @@ async def startup_event():
     else:
         os.environ.pop('FUNASR_HOME', None)
     print("标点符号模型加载完成")
-
-    vad_state["model"] = model_state["vad_model"]
-
-
-@app.websocket("/v1/ws/vad")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    vad_state["active_websockets"].add(websocket)
-    try:
-        print("新的WebSocket连接")
-        while True:
-            try:
-                data = await websocket.receive_bytes()
-                audio = np.frombuffer(data, dtype=np.float32).copy()
-
-                if len(audio) == WINDOW_SIZE:
-                    audio_tensor = torch.FloatTensor(audio)
-                    speech_prob = vad_state["model"](audio_tensor, SAMPLE_RATE).item()
-                    result = {
-                        "is_speech": speech_prob > VAD_THRESHOLD,
-                        "probability": float(speech_prob)
-                    }
-                    await websocket.send_text(json.dumps(result, ensure_ascii=False))
-            except WebSocketDisconnect:
-                print("客户端断开连接")
-                break
-            except Exception as e:
-                print(f"处理音频数据时出错: {str(e)}")
-                break
-    except Exception as e:
-        print(f"WebSocket错误: {str(e)}")
-    finally:
-        if websocket in vad_state["active_websockets"]:
-            vad_state["active_websockets"].remove(websocket)
-        print("WebSocket连接关闭")
-        try:
-            await websocket.close()
-        except:
-            pass
 
 
 @app.post("/v1/upload_audio")
@@ -278,27 +201,6 @@ async def upload_audio(file: UploadFile = File(...)):
             "status": "error",
             "message": str(e)
         }
-
-
-@app.get("/vad/status")
-def get_status():
-    closed_websockets = set()
-    for ws in vad_state["active_websockets"]:
-        try:
-            if ws.client_state.state.name == "DISCONNECTED":
-                closed_websockets.add(ws)
-        except:
-            closed_websockets.add(ws)
-
-    for ws in closed_websockets:
-        vad_state["active_websockets"].remove(ws)
-
-    return {
-        "is_running": bool(vad_state["active_websockets"]),
-        "active_connections": len(vad_state["active_websockets"])
-    }
-
-
 if __name__ == '__main__':
     import uvicorn
 
