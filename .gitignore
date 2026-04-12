@@ -47,3 +47,4 @@ rag_chat_history_records.json
 rag_doc_tracker.json
 triggers.json
 skill.d/
+backend/plugins/plugins.state.json

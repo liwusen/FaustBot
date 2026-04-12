@@ -1265,6 +1265,7 @@ async def shutdown_event():
         except Exception:
             pass
         plugin_heartbeat_task = None
+    trigger_manager.exitflag=True
     print("Shutting down FAUST Backend Main Service...")
 
 if __name__ == "__main__":
