@@ -265,11 +265,15 @@ const GLOBAL_SHORTCUTS = [
   { accelerator: 'CommandOrControl+Alt+Up', command: 'SCALE_UP' },
   { accelerator: 'CommandOrControl+Alt+Down', command: 'SCALE_DOWN' },
   { accelerator: 'CommandOrControl+Alt+M', command: 'RANDOM_MOTION' },
+  { accelerator: 'CommandOrControl+Shift+T', command: 'FOCUS_TEXT_CHAT' },
 ];
 
 function sendFaustCommand(command) {
   if (!mainWindow || !mainWindow.webContents) return false;
   try {
+    if (command === 'FOCUS_TEXT_CHAT') {
+      showMainWindow();
+    }
     mainWindow.webContents.send('faust-command', command);
     return true;
   } catch (e) {
@@ -336,35 +340,74 @@ function createWindow(){
   mainWindow.setAlwaysOnTop(true, 'screen-saver');
 }
 
-function launchPySideConfiger(){
-  const scriptPath = path.join(__dirname, 'configer_pyside6.py');
-  if (!fs.existsSync(scriptPath)) {
-    return { ok: false, error: `Configer 脚本不存在: ${scriptPath}` };
-  }
-
-  const candidates = [
-    process.env.PYTHON ? { cmd: process.env.PYTHON, args: [scriptPath] } : null,
-    { cmd: 'python', args: [scriptPath] },
-    { cmd: 'py', args: ['-3', scriptPath] },
-  ].filter(Boolean);
-
-  let lastError = null;
-  for (const c of candidates) {
+function spawnDetachedWithCheck(cmd, args, options = {}) {
+  return new Promise((resolve) => {
+    let settled = false;
     try {
-      const child = spawn(c.cmd, c.args, {
+      const child = spawn(cmd, args, {
         cwd: __dirname,
         detached: true,
         stdio: 'ignore',
         windowsHide: true,
+        shell: false,
+        ...options,
       });
-      child.unref();
-      return { ok: true, launcher: c.cmd };
-    } catch (e) {
-      lastError = e;
+
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        try { child.removeAllListeners('error'); } catch (e) {}
+        try { child.removeAllListeners('spawn'); } catch (e) {}
+        resolve(result);
+      };
+
+      child.once('error', (error) => {
+        finish({ ok: false, error: String(error), launcher: cmd });
+      });
+
+      child.once('spawn', () => {
+        try { child.unref(); } catch (e) {}
+        finish({ ok: true, launcher: cmd });
+      });
+    } catch (error) {
+      resolve({ ok: false, error: String(error), launcher: cmd });
     }
+  });
+}
+
+async function launchPySideConfiger(){
+  const scriptPath = path.join(__dirname, 'configer_pyside6.py');
+  const startBatPath = path.join(__dirname, 'start-configer.bat');
+  if (!fs.existsSync(scriptPath)) {
+    return { ok: false, error: `Configer 脚本不存在: ${scriptPath}` };
   }
 
-  return { ok: false, error: String(lastError || '未找到可用 Python 解释器') };
+  const candidates = [];
+  if (fs.existsSync(startBatPath)) {
+    candidates.push({
+      cmd: 'cmd.exe',
+      args: ['/c', 'start', '', startBatPath],
+      options: { shell: false, windowsHide: true },
+    });
+  }
+  if (process.env.PYTHON) {
+    candidates.push({ cmd: process.env.PYTHON, args: [scriptPath] });
+  }
+  candidates.push(
+    { cmd: 'python', args: [scriptPath] },
+    { cmd: 'py', args: ['-3', scriptPath] },
+  );
+
+  let lastResult = null;
+  for (const candidate of candidates) {
+    const result = await spawnDetachedWithCheck(candidate.cmd, candidate.args, candidate.options || {});
+    if (result.ok) {
+      return result;
+    }
+    lastResult = result;
+  }
+
+  return { ok: false, error: String((lastResult && lastResult.error) || '未找到可用 Python 解释器或启动脚本') };
 }
 
 function getTrayIconPath(){
@@ -414,7 +457,12 @@ function createTray(){
   tray.setToolTip('Faust Live2D');
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '显示前端', click: ()=> showMainWindow() },
-    { label: '打开配置中心(PySide6)', click: ()=> launchPySideConfiger() },
+    { label: '打开配置中心(PySide6)', click: async ()=> {
+      const result = await launchPySideConfiger();
+      if (!result.ok) {
+        dialog.showErrorBox('打开配置中心失败', result.error || '打开 PySide6 Configer 失败');
+      }
+    } },
     { label: '隐藏到托盘', click: ()=> hideMainWindowToTray() },
     { type: 'separator' },
     { label: '退出', click: ()=> app.quit() },
@@ -516,8 +564,8 @@ ipcMain.handle('show-from-tray', () => {
   return showMainWindow();
 });
 
-ipcMain.handle('open-config-window', () => {
-  const result = launchPySideConfiger();
+ipcMain.handle('open-config-window', async () => {
+  const result = await launchPySideConfiger();
   if (!result.ok) {
     throw new Error(result.error || '打开 PySide6 Configer 失败');
   }
