@@ -643,6 +643,7 @@
   let streamTtsNextPlayId = 0;
   const streamTtsPending = new Map();
   let streamTtsPlaybackPromise = null;
+  let streamTtsSessionId = 0;
   const streamTtsSentenceEndRe = /[。！？!?；;]+$/;
 
   function normalizeTtsText(text){
@@ -795,6 +796,7 @@
   }
 
   function resetStreamTtsState(){
+    streamTtsSessionId += 1;
     streamTtsDrainPromise = null;
     streamTtsSentenceId = 0;
     streamTtsNextPlayId = 0;
@@ -906,11 +908,13 @@
   async function enqueueStreamTtsSentence(sentence, lang){
     sentence = normalizeTtsText(sentence).trim();
     if (!sentence) return;
+    const sessionId = streamTtsSessionId;
     const id = streamTtsSentenceId++;
     streamTtsPending.set(id, { status: 'pending', text: sentence, blob: null });
     void flushStreamTtsQueue();
     try{
       const blob = await requestTtsBlob(sentence, lang);
+      if (sessionId !== streamTtsSessionId) return;
       if (!blob){
         streamTtsPending.set(id, { status: 'failed', text: sentence, blob: null });
         await flushStreamTtsQueue();
@@ -919,6 +923,7 @@
       streamTtsPending.set(id, { status: 'ready', blob, text: sentence });
       await flushStreamTtsQueue();
     }catch(e){
+      if (sessionId !== streamTtsSessionId) return;
       console.warn('stream TTS sentence failed', sentence, e);
       streamTtsPending.set(id, { status: 'failed', text: sentence, blob: null });
       await flushStreamTtsQueue();
@@ -936,6 +941,7 @@
     if (!msg) return;
 
     if (msg.type === 'start'){
+      resetStreamTtsState();
       currentChatRequest.replyText = '';
       currentChatRequest.pendingBuffer = '';
       if (chatStatusEl) chatStatusEl.textContent = '聊天流式响应中...';
