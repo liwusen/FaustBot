@@ -49,7 +49,8 @@ def frontend_speech_config() -> dict[str, Any]:
     return {
         "tts_mode": _current_tts_mode(),
         "asr_mode": _current_asr_mode(),
-        "asr_detection_mode": "energy" if _current_asr_mode() == "openai" else "vad",
+        "asr_detection_mode": "vad",
+        "vad_ws_path": "/faust/audio/ws/vad",
         "frontend_default_tts_lang": getattr(conf, "FRONTEND_DEFAULT_TTS_LANG", "zh"),
         "openai_asr_energy_threshold": float(getattr(conf, "OPENAI_ASR_ENERGY_THRESHOLD", 0.02) or 0.02),
         "openai_asr_silence_ms": int(getattr(conf, "OPENAI_ASR_SILENCE_MS", 700) or 700),

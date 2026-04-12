@@ -80,11 +80,13 @@ SPEECH_PUBLIC_KEYS = [
     "OPENAI_ASR_RESPONSE_FORMAT",
     "OPENAI_ASR_TEMPERATURE",
     "OPENAI_ASR_TIMESTAMP_GRANULARITIES",
+]
+OBSOLETE_SPEECH_PUBLIC_KEYS = {
     "OPENAI_ASR_ENERGY_THRESHOLD",
     "OPENAI_ASR_SILENCE_MS",
     "OPENAI_ASR_MIN_SPEECH_MS",
     "OPENAI_ASR_PREROLL_MS",
-]
+}
 SPEECH_PRIVATE_KEYS = [
     "OPENAI_TTS_API_KEY",
     "OPENAI_ASR_API_KEY",
@@ -97,7 +99,7 @@ TTS_KEYS = [
 AGENT_FILES = ["AGENT.md", "ROLE.md", "COREMEMORY.md", "TASK.md"]
 
 # 不在 AI Provider 区域重复展示的 public 配置键（这些键在其他 tab 中展示）。
-PUBLIC_PROVIDER_EXCLUDE_KEYS = set(LIVE2D_KEYS + TTS_KEYS + SPEECH_PUBLIC_KEYS)
+PUBLIC_PROVIDER_EXCLUDE_KEYS = set(LIVE2D_KEYS + TTS_KEYS + SPEECH_PUBLIC_KEYS) | OBSOLETE_SPEECH_PUBLIC_KEYS
 PUBLIC_PROVIDER_EXCLUDE_KEYS.add("PLUGIN_MARKET_INDEX_URL")
 PRIVATE_PROVIDER_EXCLUDE_KEYS = set(SPEECH_PRIVATE_KEYS)
 
@@ -303,6 +305,7 @@ class ConfigerWindow(QMainWindow):
         self._build_provider_tab()
         self._build_agent_tab()
         self._build_live2d_tab()
+        self._build_speech_tab()
         self._build_rag_tab()
         self._build_runtime_tab()
         self._build_trigger_tab()
@@ -352,6 +355,17 @@ class ConfigerWindow(QMainWindow):
         self.live2d_form = QFormLayout(group)
         layout.addWidget(group)
 
+        self.model_list = QListWidget()
+        layout.addWidget(QLabel("可用模型"))
+        layout.addWidget(self.model_list, 1)
+
+        self.model_list.itemDoubleClicked.connect(self._apply_selected_model_path)
+        self.tabs.addTab(tab, "Live2D")
+
+    def _build_speech_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
         speech_group = QGroupBox("语音模式与 OpenAI 配置")
         speech_layout = QHBoxLayout(speech_group)
         self.speech_public_box = QGroupBox("公开语音配置")
@@ -394,13 +408,8 @@ class ConfigerWindow(QMainWindow):
         tts_form.addRow("", self.tts_apply_btn)
         
         layout.addWidget(tts_group)
-
-        self.model_list = QListWidget()
-        layout.addWidget(QLabel("可用模型"))
-        layout.addWidget(self.model_list, 1)
-
-        self.model_list.itemDoubleClicked.connect(self._apply_selected_model_path)
-        self.tabs.addTab(tab, "Live2D / 语音")
+        layout.addStretch(1)
+        self.tabs.addTab(tab, "语音控制")
 
     def _build_agent_tab(self):
         tab = QWidget()

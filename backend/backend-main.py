@@ -4,6 +4,7 @@ import json
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 import uvicorn
+import numpy as np
 from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
@@ -34,6 +35,7 @@ import faust_backend.rag_client as rag_client
 import faust_backend.plugin_market as plugin_market
 import faust_backend.skill_manager as skill_manager
 import faust_backend.speech_runtime as speech_runtime
+import faust_backend.vad_runtime as vad_runtime
 from faust_backend.plugin_system import PluginManager
 import tqdm
 from os.path import join as pjoin
@@ -378,6 +380,11 @@ async def startup_event():
         await admin_runtime.align_rag_agent(AGENT_NAME)
     except Exception as e:
         print(f"[main] Startup RAG initialization skipped: {e}")
+    try:
+        await vad_runtime.vad_runtime.startup()
+        print("[main] VAD runtime loaded on CPU.")
+    except Exception as e:
+        print(f"[main] Startup VAD initialization failed: {e}")
     #--- Start the trigger watchdog thread to monitor and activate triggers.
     print("[main] Trigger Watchdog Thread starting...")
     trigger_manager.start_trigger_watchdog_thread()
@@ -1242,6 +1249,35 @@ async def speech_config_get():
     return {"status": "ok", "config": speech_runtime.frontend_speech_config()}
 
 
+@app.get("/faust/audio/vad/status")
+async def speech_vad_status_get():
+    return await vad_runtime.vad_runtime.status()
+
+
+@app.websocket("/faust/audio/ws/vad")
+async def speech_vad_ws(websocket: WebSocket):
+    await websocket.accept()
+    await vad_runtime.vad_runtime.connection_opened()
+    try:
+        while True:
+            data = await websocket.receive_bytes()
+            audio = np.frombuffer(data, dtype=np.float32).copy()
+            if len(audio) != vad_runtime.WINDOW_SIZE:
+                continue
+            result = await vad_runtime.vad_runtime.infer_frame(audio)
+            await websocket.send_text(json.dumps(result, ensure_ascii=False))
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        print(f"[main] VAD websocket error: {e}")
+    finally:
+        await vad_runtime.vad_runtime.connection_closed()
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
 @app.post("/faust/audio/tts")
 async def speech_tts_post(payload: dict):
     text = ""
@@ -1320,6 +1356,7 @@ async def shutdown_event():
             pass
         plugin_heartbeat_task = None
     trigger_manager.exitflag=True
+    await vad_runtime.vad_runtime.shutdown()
     print("Shutting down FAUST Backend Main Service...")
 
 if __name__ == "__main__":

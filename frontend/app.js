@@ -245,13 +245,22 @@
       const b = currentModel.getBounds();
       const scaleX = canvasRect.width / app.renderer.width;
       const scaleY = canvasRect.height / app.renderer.height;
-      const left = canvasRect.left + b.x * scaleX+scaleX * b.width * 0.4;
+      const left = canvasRect.left + b.x * scaleX + scaleX * b.width * 0.4;
       const top = canvasRect.top + b.y * scaleY;
       const height = b.height * scaleY;
-      quickController.style.left = Math.round(left - 12) + 'px';
-      quickController.style.top = Math.round(top + height * 0.45) + 'px';
-      quickController.style.transform = 'translate(-50%, -50%)';
-      quickController.style.scale= String(1 * scaleX);
+      const controllerScale = Math.max(0.72, Math.min(1.2, scaleX));
+      const rect = quickController.getBoundingClientRect();
+      const estimatedWidth = rect.width > 0 ? rect.width : 104;
+      const estimatedHeight = rect.height > 0 ? rect.height : 340;
+      const minLeft = estimatedWidth * 0.5 + 8;
+      const maxLeft = window.innerWidth - estimatedWidth * 0.5 - 8;
+      const minTop = estimatedHeight * 0.5 + 8;
+      const maxTop = window.innerHeight - estimatedHeight * 0.5 - 8;
+      const anchoredLeft = Math.max(minLeft, Math.min(maxLeft, left - 12));
+      const anchoredTop = Math.max(minTop, Math.min(maxTop, top + height * 0.45));
+      quickController.style.left = Math.round(anchoredLeft) + 'px';
+      quickController.style.top = Math.round(anchoredTop) + 'px';
+      quickController.style.setProperty('--qc-scale', controllerScale.toFixed(3));
     }catch(e){/* ignore */}
   }
 
@@ -332,6 +341,23 @@
     else startRecording();
   }
 
+  function focusTextChatInput(){
+    if (!textChatInput) return false;
+    try{
+      textChatInput.focus();
+      if (typeof textChatInput.select === 'function') {
+        textChatInput.select();
+      }
+      if (window.api && window.api.focusMainWindow) {
+        window.api.focusMainWindow().catch(()=>{});
+      }
+      return true;
+    }catch(e){
+      console.warn('focusTextChatInput failed', e);
+      return false;
+    }
+  }
+
   function loadSavedModelState(){
     loadModelState();
     if (!currentModel || !_savedModelState) return;
@@ -397,14 +423,15 @@
   const TTS_ENDPOINT = `http://${BACKEND_HOST}:${BACKEND_PORT}/faust/audio/tts`;
   const SPEECH_CONFIG_ENDPOINT = `http://${BACKEND_HOST}:${BACKEND_PORT}/faust/audio/config`;
   // VAD websocket state
-  const VAD_WS_URL = 'ws://127.0.0.1:1000/v1/ws/vad';
+  const DEFAULT_VAD_WS_PATH = '/faust/audio/ws/vad';
   let vadWs = null;
-  let useVAD = true; // try to use websocket VAD by default
+  let useVAD = true;
   const VAD_WINDOW_SIZE = 512; // must match backend WINDOW_SIZE
   let speechRuntimeConfig = {
     tts_mode: 'local',
     asr_mode: 'local',
     asr_detection_mode: 'vad',
+    vad_ws_path: DEFAULT_VAD_WS_PATH,
     frontend_default_tts_lang: 'zh',
     openai_asr_energy_threshold: 0.02,
     openai_asr_silence_ms: 700,
@@ -425,13 +452,18 @@
   const VAD_END_DEBOUNCE_MS = 300;
   loadSavedModelState();
 
+  function getVadWsUrl(){
+    const path = String((speechRuntimeConfig && speechRuntimeConfig.vad_ws_path) || DEFAULT_VAD_WS_PATH).trim() || DEFAULT_VAD_WS_PATH;
+    return `ws://${BACKEND_HOST}:${BACKEND_PORT}${path.startsWith('/') ? path : `/${path}`}`;
+  }
+
   function applySpeechRuntimeConfig(config){
     speechRuntimeConfig = Object.assign({}, speechRuntimeConfig, config || {});
     const frameMs = (VAD_WINDOW_SIZE / TARGET_SAMPLE_RATE) * 1000;
     preRollFrameLimit = Math.max(1, Math.ceil((Number(speechRuntimeConfig.openai_asr_preroll_ms) || 250) / frameMs));
     silenceFrameLimit = Math.max(1, Math.ceil((Number(speechRuntimeConfig.openai_asr_silence_ms) || 700) / frameMs));
     minSpeechFrameLimit = Math.max(1, Math.ceil((Number(speechRuntimeConfig.openai_asr_min_speech_ms) || 250) / frameMs));
-    useVAD = speechRuntimeConfig.asr_detection_mode === 'vad';
+    useVAD = true;
     if (ttsLang && speechRuntimeConfig.frontend_default_tts_lang){
       ttsLang.value = speechRuntimeConfig.frontend_default_tts_lang;
     }
@@ -489,7 +521,7 @@
     if (active){
       noVoiceCnt = 0;
       speechFrameCnt += 1;
-      asrStatusEl.textContent = speechRuntimeConfig.asr_detection_mode === 'energy' ? '能量检测到语音...' : '检测到语音...';
+      asrStatusEl.textContent = '检测到语音...';
       if (!inSpeech){
         inSpeech = true;
         speechFrameCnt = 1;
@@ -502,19 +534,10 @@
     }
 
     noVoiceCnt += 1;
-    asrStatusEl.textContent = speechRuntimeConfig.asr_detection_mode === 'energy' ? '等待语音...' : '没有语音';
+    asrStatusEl.textContent = '没有语音';
     if (inSpeech && noVoiceCnt >= silenceFrameLimit && !vadEndTimer){
       vadEndTimer = setTimeout(()=> finalizeSpeechSegment(probability), VAD_END_DEBOUNCE_MS);
     }
-  }
-
-  function detectFrameEnergy(frame){
-    let sumSquares = 0;
-    for (let i = 0; i < frame.length; i++) sumSquares += frame[i] * frame[i];
-    const rms = Math.sqrt(sumSquares / Math.max(1, frame.length));
-    const threshold = Math.max(1e-4, Number(speechRuntimeConfig.openai_asr_energy_threshold) || 0.02);
-    const probability = Math.max(0, Math.min(1, rms / threshold));
-    return { active: rms >= threshold, probability };
   }
   // convert Float32Array -> Int16 WAV blob at TARGET_SAMPLE_RATE
   function interleaveAndEncodeWav(float32Array, inputSampleRate){
@@ -707,11 +730,10 @@
         if (!arg) return;
         // use existing synthesizeAndPlay TTS function; prefer UI-selected lang
         const lang = getCurrentTtsLang();
-        const shouldRestoreVAD = speechRuntimeConfig.asr_detection_mode === 'vad';
         useVAD = false;
         showResultBubble('ai', arg);
         await synthesizeAndPlay(arg, lang);
-        useVAD = shouldRestoreVAD;
+        useVAD = true;
       } else if (cmd === 'STOP'){
         // stop audio and optionally stop asr
         try{ stopAudio(); }catch(e){}
@@ -777,6 +799,8 @@
         interruptPlayback();
       } else if (cmd === 'INTERRUPT_SPEECH'){
         interruptPlayback();
+      } else if (cmd === 'FOCUS_TEXT_CHAT'){
+        focusTextChatInput();
       } else if (cmd === 'RANDOM_MOTION'){
         playRandomMotion();
       } else if (cmd === 'SCALE_UP'){
@@ -1127,12 +1151,16 @@
       const scaleX = canvasRect.width / app.renderer.width;
       const scaleY = canvasRect.height / app.renderer.height;
       const clientX = canvasRect.left + (b.x + b.width * 0.5) * scaleX;
-      const waistY = canvasRect.top + (b.y + b.height * 0.62) * scaleY;
-      const horizontalOffset = Math.min(150, Math.max(0, b.width * scaleX * 0.55));
-      textChatBar.style.left = Math.round(clientX + horizontalOffset) + 'px';
-      textChatBar.style.top = Math.round(waistY) + 'px';
+      const waistY = canvasRect.top + (b.y + b.height * 0.53) * scaleY;
+      const rect = textChatBar.getBoundingClientRect();
+      const estimatedWidth = rect.width > 0 ? rect.width : 420;
+      const estimatedHeight = rect.height > 0 ? rect.height : 64;
+      const clampedLeft = Math.max(estimatedWidth * 0.5 + 12, Math.min(window.innerWidth - estimatedWidth * 0.5 - 12, clientX));
+      const clampedTop = Math.max(estimatedHeight * 0.5 + 12, Math.min(window.innerHeight - estimatedHeight * 0.5 - 12, waistY));
+      textChatBar.style.left = Math.round(clampedLeft) + 'px';
+      textChatBar.style.top = Math.round(clampedTop) + 'px';
       textChatBar.style.bottom = 'auto';
-      textChatBar.style.transform = 'translate(-50%, -42%)';
+      textChatBar.style.transform = 'translate(-50%, -50%)';
       updateQuickControllerPosition();
     }catch(e){/*ignore*/}
   }
@@ -1174,20 +1202,15 @@
         let offset = 0;
         while (combined.length - offset >= VAD_WINDOW_SIZE){
           const frame = combined.subarray(offset, offset + VAD_WINDOW_SIZE);
-          if (!useVAD){
-            const energy = detectFrameEnergy(frame);
-            handleSpeechActivity(energy.active, energy.probability);
-          } else {
-            try{
-              if (vadWs && vadWs.readyState === WebSocket.OPEN){
-                const start = frame.byteOffset || 0;
-                const end = start + (frame.byteLength || frame.length * 4);
-                const slice = frame.buffer.slice(start, end);
-                vadWs.send(slice);
-              }
-            }catch(e){
-              console.log("fail to send VAD frame:", e);
+          try{
+            if (useVAD && vadWs && vadWs.readyState === WebSocket.OPEN){
+              const start = frame.byteOffset || 0;
+              const end = start + (frame.byteLength || frame.length * 4);
+              const slice = frame.buffer.slice(start, end);
+              vadWs.send(slice);
             }
+          }catch(e){
+            console.log("fail to send VAD frame:", e);
           }
           // maintain pre-roll ring buffer
           preBufferFrames.push(frame.slice(0));
@@ -1212,26 +1235,20 @@
       // try to open VAD websocket if enabled
       noVoiceCnt=0;
       speechFrameCnt = 0;
-      if (speechRuntimeConfig.asr_detection_mode === 'vad'){
-        try{
-          vadWs = new WebSocket(VAD_WS_URL);
-          vadWs.binaryType = 'arraybuffer';
-          vadWs.onopen = ()=>{ asrStatusEl.textContent = '已连接到语音识别服务'; useVAD=true; console.log('VAD ws opened'); };
-          vadWs.onmessage = (ev)=>{
-            try{
-              const msg = typeof ev.data === 'string' ? JSON.parse(ev.data) : JSON.parse(new TextDecoder().decode(ev.data));
-              // prefer probability for decisions; fall back to is_speech if probability missing
-              const p = (typeof msg.probability !== 'undefined') ? (Number(msg.probability) || 0) : (msg.is_speech ? 1 : 0);
-              handleSpeechActivity(p > 0.5, p);
-            }catch(err){ console.warn('VAD ws message parse err', err); }
-          };
-          vadWs.onerror = (ev)=>{ console.warn('VAD ws error', ev); useVAD = false; asrStatusEl.textContent = 'VAD连接错误'; vadWs = null; };
-          vadWs.onclose = ()=>{ if (useVAD){ useVAD = false; asrStatusEl.textContent = 'VAD断开'; vadWs = null; } };
-        }catch(e){ console.warn('open vad ws failed', e); useVAD = false; }
-      } else {
-        useVAD = false;
-        asrStatusEl.textContent = '已启用能量检测';
-      }
+      try{
+        vadWs = new WebSocket(getVadWsUrl());
+        vadWs.binaryType = 'arraybuffer';
+        vadWs.onopen = ()=>{ asrStatusEl.textContent = '已连接到主后端 VAD'; useVAD=true; console.log('VAD ws opened'); };
+        vadWs.onmessage = (ev)=>{
+          try{
+            const msg = typeof ev.data === 'string' ? JSON.parse(ev.data) : JSON.parse(new TextDecoder().decode(ev.data));
+            const p = (typeof msg.probability !== 'undefined') ? (Number(msg.probability) || 0) : (msg.is_speech ? 1 : 0);
+            handleSpeechActivity(p > 0.5, p);
+          }catch(err){ console.warn('VAD ws message parse err', err); }
+        };
+        vadWs.onerror = (ev)=>{ console.warn('VAD ws error', ev); useVAD = false; asrStatusEl.textContent = '主后端 VAD 连接错误'; vadWs = null; };
+        vadWs.onclose = ()=>{ if (useVAD){ useVAD = false; asrStatusEl.textContent = '主后端 VAD 已断开'; vadWs = null; } };
+      }catch(e){ console.warn('open vad ws failed', e); useVAD = false; asrStatusEl.textContent = '无法连接主后端 VAD'; }
     }catch(err){
       console.error('start mic failed', err);
       asrStatusEl.textContent = '麦克风权限或错误';
@@ -1339,10 +1356,17 @@
       sendTextChatMessage();
     }
   });
+  document.addEventListener('keydown', (e)=>{
+    if (e.ctrlKey && e.shiftKey && (e.key === 'T' || e.key === 't')){
+      e.preventDefault();
+      focusTextChatInput();
+    }
+  });
 
   // update asrText position each frame if visible
   function rafUpdate(){
     if (asrTextEl && asrTextEl.style.display !== 'none') updateAsrTextPosition();
+    if (quickController && currentModel) updateQuickControllerPosition();
     updateTextChatBarPosition();
     requestAnimationFrame(rafUpdate);
   }

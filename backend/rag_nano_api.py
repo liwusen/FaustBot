@@ -281,7 +281,8 @@ class AgentStorage:
         self.embed_dim = embed_dim
         self.docs_path = self.working_dir / "docs.json"
         self.chunks_meta_path = self.working_dir / "chunks_meta.json"
-        self.db_path = str(self.working_dir / "chunks.vdb")
+        self.db_file = self.working_dir / "chunks.vdb"
+        self.db_path = str(self.db_file)
         self.docs: dict[str, dict[str, Any]] = {}
         self.chunks_meta: dict[str, dict[str, Any]] = {}
         self.vdb = NanoVectorDB(self.embed_dim, storage_file=self.db_path)
@@ -303,8 +304,16 @@ class AgentStorage:
         self.chunks_meta = self._load_json(self.chunks_meta_path, {})
 
     def flush_meta(self):
+        self.working_dir.mkdir(parents=True, exist_ok=True)
         self._save_json(self.docs_path, self.docs)
         self._save_json(self.chunks_meta_path, self.chunks_meta)
+
+    def flush_vectors(self):
+        self.db_file.parent.mkdir(parents=True, exist_ok=True)
+        self.vdb.save()
+
+    def needs_vector_rebuild(self) -> bool:
+        return (not self.db_file.exists()) and bool(self.chunks_meta)
 
     def upsert_doc(self, doc: dict[str, Any]):
         self.docs[doc["doc_id"]] = doc
@@ -422,6 +431,36 @@ async def reset_openai_client() -> AsyncOpenAI:
     client = build_openai_client()
     globals()["openai_client"] = client
     return client
+
+
+async def rebuild_missing_vectors(storage: AgentStorage) -> None:
+    if not storage.needs_vector_rebuild():
+        return
+
+    ordered_chunks = sorted(
+        storage.chunks_meta.values(),
+        key=lambda item: (
+            str(item.get("doc_id", "")),
+            int(item.get("chunk_index", 0) or 0),
+        ),
+    )
+    chunk_texts = [str(item.get("text", "") or "") for item in ordered_chunks]
+    if not chunk_texts:
+        return
+
+    print(f"[rag] Rebuilding missing vector snapshot for {storage.working_dir} with {len(chunk_texts)} chunks.")
+    embeddings = await embed_texts(chunk_texts)
+    rows = []
+
+    for item, vector in zip(ordered_chunks, embeddings):
+        row = dict(item)
+        row["__vector__"] = np.asarray(vector, dtype=np.float32)
+        rows.append(row)
+
+    if rows:
+        storage.vdb.upsert(rows)
+        storage.flush_vectors()
+        print(f"[rag] Rebuilt vector snapshot: {storage.db_path}")
 
 
 def get_storage(agent_name: str | None = None) -> AgentStorage:
@@ -568,6 +607,7 @@ async def insert_document(storage: AgentStorage, text: str, doc_id: str | None, 
     if old_chunk_ids:
         try:
             storage.vdb.delete(old_chunk_ids)
+            storage.flush_vectors()
         except Exception:
             pass
         for chunk_id in old_chunk_ids:
@@ -600,6 +640,7 @@ async def insert_document(storage: AgentStorage, text: str, doc_id: str | None, 
 
     if rows:
         storage.vdb.upsert(rows)
+        storage.flush_vectors()
 
     now = utc_now_iso()
     existing = storage.docs.get(final_doc_id, {})
@@ -673,7 +714,8 @@ async def query_document(storage: AgentStorage, payload: QueryRequest) -> QueryR
 
 async def rebuild_runtime_for_agent(agent_name: str | None = None):
     selected = sanitize_agent_name(agent_name or runtime_config["agent_name"])
-    get_storage(selected)
+    storage = get_storage(selected)
+    await rebuild_missing_vectors(storage)
     return True
 
 
@@ -950,6 +992,7 @@ async def delete_document(doc_id: str):
         if to_delete:
             try:
                 storage.vdb.delete(to_delete)
+                storage.flush_vectors()
             except Exception:
                 pass
 

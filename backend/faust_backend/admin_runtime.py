@@ -17,6 +17,12 @@ AGENTS_ROOT = BACKEND_ROOT / "agents"
 PUBLIC_CONFIG_PATH = BACKEND_ROOT / "faust.config.json"
 PRIVATE_CONFIG_PATH = BACKEND_ROOT / "faust.config.private.json"
 PRIVATE_EXAMPLE_PATH = BACKEND_ROOT / "faust.config.private.example"
+OBSOLETE_PUBLIC_CONFIG_KEYS = {
+    "OPENAI_ASR_ENERGY_THRESHOLD",
+    "OPENAI_ASR_SILENCE_MS",
+    "OPENAI_ASR_MIN_SPEECH_MS",
+    "OPENAI_ASR_PREROLL_MS",
+}
 
 AGENT_CORE_FILES = ["AGENT.md", "ROLE.md", "COREMEMORY.md", "TASK.md"]
 PUBLIC_CONFIG_DEFAULTS = {
@@ -59,10 +65,6 @@ PUBLIC_CONFIG_DEFAULTS = {
     "OPENAI_ASR_RESPONSE_FORMAT": "json",
     "OPENAI_ASR_TEMPERATURE": 0.0,
     "OPENAI_ASR_TIMESTAMP_GRANULARITIES": "",
-    "OPENAI_ASR_ENERGY_THRESHOLD": 0.02,
-    "OPENAI_ASR_SILENCE_MS": 700,
-    "OPENAI_ASR_MIN_SPEECH_MS": 250,
-    "OPENAI_ASR_PREROLL_MS": 250,
     # TTS 参考音频配置
     "TTS_REFER_WAV_PATH": "",
     "TTS_PROMPT_TEXT": "",
@@ -118,7 +120,10 @@ def ensure_private_config_exists() -> None:
 
 
 def get_public_config() -> Dict[str, Any]:
-    return _read_json(PUBLIC_CONFIG_PATH, PUBLIC_CONFIG_DEFAULTS)
+    data = _read_json(PUBLIC_CONFIG_PATH, PUBLIC_CONFIG_DEFAULTS)
+    for key in OBSOLETE_PUBLIC_CONFIG_KEYS:
+        data.pop(key, None)
+    return data
 
 
 def get_private_config(mask_secrets: bool = True) -> Dict[str, Any]:
@@ -170,6 +175,9 @@ def save_config(payload: Dict[str, Any]) -> Dict[str, Any]:
     for key, value in public_in.items():
         skey = str(key)
         public_cfg[skey] = value
+
+    for key in OBSOLETE_PUBLIC_CONFIG_KEYS:
+        public_cfg.pop(key, None)
 
 
     for key, value in private_in.items():
