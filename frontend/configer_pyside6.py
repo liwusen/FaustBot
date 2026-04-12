@@ -113,6 +113,74 @@ FIELD_OPTIONS = {
     "TTS_PROMPT_LANGUAGE": ["zh", "en", "ja", "ko", "yue", "中文", "英文", "日文", "韩文", "粤语"],
 }
 
+FIELD_METADATA: Dict[str, Dict[str, str]] = {
+    "GUI_OPERATOR_LLM_MODEL": {"label": "GUI 操作模型", "tooltip": "用于 GUI 自动操作能力的模型名称。"},
+    "GUI_OPERATOR_LLM_BASE": {"label": "GUI 操作接口地址", "tooltip": "GUI 自动操作模型使用的 API Base URL。"},
+    "CHAT_MODEL": {"label": "主对话模型", "tooltip": "Faust 主聊天与推理使用的模型名称。"},
+    "CHAT_API_BASE": {"label": "主对话接口地址", "tooltip": "主对话模型对应的 API Base URL。"},
+    "AGENT_NAME": {"label": "当前 Agent", "tooltip": "指定当前加载的角色目录名称。"},
+    "SECURITY_VERIFIER_API_ENDPOINT": {"label": "安全校验接口地址", "tooltip": "安全审查模型使用的 API Base URL。"},
+    "SECURITY_VERIFIER_LLM_MODEL": {"label": "安全校验模型", "tooltip": "用于高风险操作前校验的模型名称。"},
+    "SECURITY_SYS_ENABLED": {"label": "启用安全系统", "tooltip": "开启后，部分高风险调用会先经过安全审查。"},
+    "RAG_ENABLED": {"label": "启用 RAG", "tooltip": "开启后允许使用检索增强记忆与文档问答能力。"},
+    "RAG_API_URL": {"label": "RAG 服务地址", "tooltip": "LightRAG 或 Nano RAG 服务的访问地址。"},
+    "RAG_LLM_BASE_URL": {"label": "RAG 模型接口地址", "tooltip": "RAG 内部调用聊天模型时使用的 API Base URL。"},
+    "RAG_CHAT_MODEL": {"label": "RAG 对话模型", "tooltip": "RAG 检索后生成回答时使用的模型名称。"},
+    "RAG_EMBED_MODEL": {"label": "RAG 向量模型", "tooltip": "用于文本向量化的 embedding 模型名称。"},
+    "RAG_EMBED_DIM": {"label": "向量维度", "tooltip": "embedding 模型输出的向量维度，必须与模型一致。"},
+    "RAG_EMBED_MAX_TOKEN_SIZE": {"label": "向量最大 Token", "tooltip": "单次向量化请求允许的最大 token 数。"},
+    "RAG_AUTO_INDEX_RECORD": {"label": "自动索引记录", "tooltip": "开启后会自动把部分记录写入 RAG 存储。"},
+    "MC_OPERATOR_URL": {"label": "Minecraft 操作地址", "tooltip": "Minecraft 桥接服务的 WebSocket 地址。"},
+    "MC_EVENT_TRIGGER_ENABLED": {"label": "启用 Minecraft 事件触发", "tooltip": "开启后 Minecraft 事件可以触发 Faust 行为。"},
+    "LIVE2D_MODEL_PATH": {"label": "Live2D 模型路径", "tooltip": "前端加载的 Live2D 模型文件路径。"},
+    "LIVE2D_MODEL_SCALE": {"label": "Live2D 缩放", "tooltip": "模型在前端画布中的整体缩放比例。"},
+    "LIVE2D_MODEL_X": {"label": "Live2D 横向位置", "tooltip": "模型 X 坐标；留空时由前端自动决定。"},
+    "LIVE2D_MODEL_Y": {"label": "Live2D 纵向位置", "tooltip": "模型 Y 坐标；留空时由前端自动决定。"},
+    "FRONTEND_CLICK_THROUGH": {"label": "前端点击穿透", "tooltip": "开启后可让桌宠窗口忽略鼠标点击。"},
+    "FRONTEND_DEFAULT_TTS_LANG": {"label": "默认 TTS 语言", "tooltip": "前端发送 TTS 请求时默认使用的语言。"},
+    "TTS_MODE": {"label": "TTS 模式", "tooltip": "选择本地 TTS 或 OpenAI 兼容 TTS。"},
+    "ASR_MODE": {"label": "ASR 模式", "tooltip": "选择本地 ASR 或 OpenAI 兼容 ASR。"},
+    "OPENAI_TTS_BASE_URL": {"label": "OpenAI TTS 接口地址", "tooltip": "OpenAI 兼容 TTS 服务的 API Base URL。"},
+    "OPENAI_TTS_MODEL": {"label": "OpenAI TTS 模型", "tooltip": "OpenAI 兼容 TTS 所使用的模型名称。"},
+    "OPENAI_TTS_VOICE": {"label": "OpenAI TTS 音色", "tooltip": "OpenAI 兼容 TTS 的 voice 参数。"},
+    "OPENAI_TTS_RESPONSE_FORMAT": {"label": "OpenAI TTS 音频格式", "tooltip": "TTS 输出的音频编码格式，例如 mp3、wav。"},
+    "OPENAI_TTS_SPEED": {"label": "OpenAI TTS 语速", "tooltip": "TTS 合成语速倍率。"},
+    "OPENAI_TTS_INSTRUCTIONS": {"label": "OpenAI TTS 附加指令", "tooltip": "传给 TTS 模型的补充风格或语气说明。"},
+    "OPENAI_ASR_BASE_URL": {"label": "OpenAI ASR 接口地址", "tooltip": "OpenAI 兼容 ASR 服务的 API Base URL。"},
+    "OPENAI_ASR_MODEL": {"label": "OpenAI ASR 模型", "tooltip": "OpenAI 兼容 ASR 所使用的模型名称。"},
+    "OPENAI_ASR_LANGUAGE": {"label": "OpenAI ASR 语言", "tooltip": "可选语言提示，留空则由服务自动判断。"},
+    "OPENAI_ASR_PROMPT": {"label": "OpenAI ASR 提示词", "tooltip": "传给识别模型的上下文提示，用于稳定术语或风格。"},
+    "OPENAI_ASR_RESPONSE_FORMAT": {"label": "OpenAI ASR 返回格式", "tooltip": "识别结果返回格式，例如 json、text、verbose_json。"},
+    "OPENAI_ASR_TEMPERATURE": {"label": "OpenAI ASR 温度", "tooltip": "识别采样温度，通常保持较低值。"},
+    "OPENAI_ASR_TIMESTAMP_GRANULARITIES": {"label": "OpenAI ASR 时间戳粒度", "tooltip": "verbose_json 模式下请求的时间戳粒度，多个值用逗号分隔。"},
+    "OPENAI_TTS_API_KEY": {"label": "OpenAI TTS 密钥", "tooltip": "OpenAI 兼容 TTS 服务使用的 API Key。"},
+    "OPENAI_ASR_API_KEY": {"label": "OpenAI ASR 密钥", "tooltip": "OpenAI 兼容 ASR 服务使用的 API Key。"},
+    "CHAT_API_KEY": {"label": "主对话密钥", "tooltip": "主聊天模型使用的 API Key。"},
+    "SEARCH_API_KEY": {"label": "搜索密钥", "tooltip": "联网搜索工具使用的 API Key。"},
+    "GUI_OPERATOR_LLM_KEY": {"label": "GUI 操作密钥", "tooltip": "GUI 自动操作模型使用的 API Key。"},
+    "SECURITY_VERIFIER_LLM_KEY": {"label": "安全校验密钥", "tooltip": "安全校验模型使用的 API Key。"},
+    "RAG_OPENAI_API_KEY": {"label": "RAG 密钥", "tooltip": "RAG 服务访问模型或向量接口时使用的 API Key。"},
+    "TTS_REFER_WAV_PATH": {"label": "TTS 参考音频路径", "tooltip": "本地 TTS 的参考音频文件路径，仅 local TTS 模式有效。"},
+    "TTS_PROMPT_TEXT": {"label": "TTS 参考文本", "tooltip": "参考音频对应的原始文本内容，仅 local TTS 模式有效。"},
+    "TTS_PROMPT_LANGUAGE": {"label": "TTS 参考语言", "tooltip": "参考音频文本的语言，仅 local TTS 模式有效。"},
+    "TEMP_DIR": {"label": "临时目录", "tooltip": "部分后端处理流程写入临时文件时使用的目录。"},
+    "PLUGIN_MARKET_INDEX_URL": {"label": "插件市场索引地址", "tooltip": "插件市场索引文件的下载地址。"},
+}
+
+
+def get_field_label(key: str) -> str:
+    meta = FIELD_METADATA.get(key, {})
+    label = str(meta.get("label") or key)
+    return f"{label} ({key})" if label != key else key
+
+
+def get_field_tooltip(key: str) -> str:
+    meta = FIELD_METADATA.get(key, {})
+    tooltip = str(meta.get("tooltip") or "").strip()
+    if not tooltip:
+        return ""
+    return f"{get_field_label(key)}\n\n{tooltip}"
+
 
 @dataclass
 class FieldWidget:
@@ -385,22 +453,25 @@ class ConfigerWindow(QMainWindow):
         self.tts_refer_wav_path_input.setPlaceholderText("参考音频文件路径，如 role_voice_api/neuro/01.wav")
         self.tts_browse_btn = QPushButton("浏览...")
         self.tts_browse_btn.clicked.connect(self._browse_tts_refer_wav)
+        self._apply_field_tooltip("TTS_REFER_WAV_PATH", self.tts_refer_wav_path_input)
         
         path_layout = QHBoxLayout()
         path_layout.addWidget(self.tts_refer_wav_path_input, 1)
         path_layout.addWidget(self.tts_browse_btn)
-        tts_form.addRow("参考音频路径", path_layout)
+        tts_form.addRow(self._make_field_label("TTS_REFER_WAV_PATH"), path_layout)
         
         # 提示文本
         self.tts_prompt_text_input = QPlainTextEdit()
         self.tts_prompt_text_input.setMaximumHeight(80)
         self.tts_prompt_text_input.setPlaceholderText("参考音频对应的文本内容")
-        tts_form.addRow("提示文本", self.tts_prompt_text_input)
+        self._apply_field_tooltip("TTS_PROMPT_TEXT", self.tts_prompt_text_input)
+        tts_form.addRow(self._make_field_label("TTS_PROMPT_TEXT"), self.tts_prompt_text_input)
         
         # 语言选择
         self.tts_prompt_language_combo = QComboBox()
         self.tts_prompt_language_combo.addItems(FIELD_OPTIONS["TTS_PROMPT_LANGUAGE"])
-        tts_form.addRow("语言", self.tts_prompt_language_combo)
+        self._apply_field_tooltip("TTS_PROMPT_LANGUAGE", self.tts_prompt_language_combo)
+        tts_form.addRow(self._make_field_label("TTS_PROMPT_LANGUAGE"), self.tts_prompt_language_combo)
         
         # 应用更改按钮
         self.tts_apply_btn = QPushButton("应用更改到 TTS 服务")
@@ -773,6 +844,21 @@ class ConfigerWindow(QMainWindow):
             if widget is not None:
                 widget.deleteLater()
 
+    def _make_field_label(self, key: str) -> QLabel:
+        label = QLabel(get_field_label(key))
+        label.setWordWrap(True)
+        tooltip = get_field_tooltip(key)
+        if tooltip:
+            label.setToolTip(tooltip)
+            label.setStatusTip(tooltip)
+        return label
+
+    def _apply_field_tooltip(self, key: str, widget: QWidget):
+        tooltip = get_field_tooltip(key)
+        if tooltip:
+            widget.setToolTip(tooltip)
+            widget.setStatusTip(tooltip)
+
     def _widget_from_value(self, key: str, value: Any) -> FieldWidget:
         value_type = type(value).__name__
         if key in FIELD_OPTIONS:
@@ -784,21 +870,25 @@ class ConfigerWindow(QMainWindow):
             w.addItems(options)
             if current:
                 w.setCurrentText(current)
+            self._apply_field_tooltip(key, w)
             return FieldWidget(key=key, widget=w, value_type="str")
         if isinstance(value, bool):
             w = QComboBox()
             w.addItems(["true", "false"])
             w.setCurrentText("true" if value else "false")
+            self._apply_field_tooltip(key, w)
             return FieldWidget(key=key, widget=w, value_type=value_type)
 
         if isinstance(value, str) and len(value) > 80:
             w = QPlainTextEdit(value)
             w.setFixedHeight(90)
+            self._apply_field_tooltip(key, w)
             return FieldWidget(key=key, widget=w, value_type=value_type)
 
         w = QLineEdit("" if value is None else str(value))
         if any(token in key.upper() for token in ["KEY", "TOKEN", "SECRET", "PASSWORD"]):
             w.setEchoMode(QLineEdit.Password)
+        self._apply_field_tooltip(key, w)
         return FieldWidget(key=key, widget=w, value_type=value_type)
 
     def _field_value(self, field: FieldWidget):
@@ -891,7 +981,7 @@ class ConfigerWindow(QMainWindow):
         for key in public_ordered_keys:
             field = self._widget_from_value(key, public_cfg.get(key))
             self.public_fields[key] = field
-            self.public_form.addRow(QLabel(key), field.widget)
+            self.public_form.addRow(self._make_field_label(key), field.widget)
 
         private_ordered_keys = []
         for key in PRIVATE_PROVIDER_KEYS:
@@ -912,24 +1002,24 @@ class ConfigerWindow(QMainWindow):
         for key in private_ordered_keys:
             field = self._widget_from_value(key, private_cfg.get(key))
             self.private_fields[key] = field
-            self.private_form.addRow(QLabel(key), field.widget)
+            self.private_form.addRow(self._make_field_label(key), field.widget)
 
         for key in LIVE2D_KEYS:
             field = self._widget_from_value(key, public_cfg.get(key))
             self.live2d_fields[key] = field
-            self.live2d_form.addRow(QLabel(key), field.widget)
+            self.live2d_form.addRow(self._make_field_label(key), field.widget)
 
         for key in SPEECH_PUBLIC_KEYS:
             field = self._widget_from_value(key, public_cfg.get(key))
             self.speech_public_fields[key] = field
-            self.speech_public_form.addRow(QLabel(key), field.widget)
+            self.speech_public_form.addRow(self._make_field_label(key), field.widget)
             if isinstance(field.widget, QComboBox) and key in {"TTS_MODE", "ASR_MODE"}:
                 field.widget.currentTextChanged.connect(lambda _=None: self._refresh_speech_ui_state())
 
         for key in SPEECH_PRIVATE_KEYS:
             field = self._widget_from_value(key, private_cfg.get(key, ""))
             self.speech_private_fields[key] = field
-            self.speech_private_form.addRow(QLabel(key), field.widget)
+            self.speech_private_form.addRow(self._make_field_label(key), field.widget)
 
         # 加载 TTS 配置到界面
         self.tts_refer_wav_path_input.setText(public_cfg.get("TTS_REFER_WAV_PATH", ""))
@@ -1106,9 +1196,14 @@ class ConfigerWindow(QMainWindow):
                 label = str(item.get("label") or key)
                 desc = str(item.get("description") or "")
                 label_text = f"{label} ({key})" if label != key else key
+                label_widget = QLabel(label_text)
+                label_widget.setWordWrap(True)
                 if desc:
-                    label_text += f"\n{desc}"
-                self.plugin_config_form.addRow(QLabel(label_text), field.widget)
+                    label_widget.setToolTip(desc)
+                    label_widget.setStatusTip(desc)
+                    field.widget.setToolTip(desc)
+                    field.widget.setStatusTip(desc)
+                self.plugin_config_form.addRow(label_widget, field.widget)
 
     def reload_plugins(self):
         try:
