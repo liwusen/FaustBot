@@ -31,6 +31,22 @@ def FrontEndPlayBG(url):
     _push_command("PLAYBG", url)
 
 
+def FrontEndLoadModel(path: str) -> None:
+    _push_command("LOAD_MODEL", str(path or ""))
+
+
+def FrontEndSetModelScale(scale: float | int) -> None:
+    _push_command("SET_MODEL_SCALE", str(scale))
+
+
+def FrontEndSetModelPosition(x: float | int, y: float | int) -> None:
+    _push_command("SET_MODEL_POSITION", f"{x} {y}")
+
+
+def FrontEndSetTextChatYFactor(value: float | int) -> None:
+    _push_command("SET_TEXT_CHAT_Y_FACTOR", str(value))
+
+
 def FrontEndShowNimbleWindow(payload: dict):
     """Send a nimble window payload to the frontend.
 

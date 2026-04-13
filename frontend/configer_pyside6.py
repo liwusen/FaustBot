@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 import os
 import requests
-from PySide6.QtCore import Qt, QDateTime
+from PySide6.QtCore import Qt, QDateTime, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSlider,
     QSplitter,
     QStatusBar,
     QTabWidget,
@@ -35,9 +36,11 @@ from PySide6.QtWidgets import (
     QSpinBox,
 )
 from pathlib import Path
+import subprocess
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 API_BASE = "http://127.0.0.1:13900"
 TIME_DISPLAY = "yyyy-MM-dd HH:mm:ss"
+FRONTEND_ROOT = Path(__file__).resolve().parent
 
 PUBLIC_PROVIDER_KEYS = [
     "GUI_OPERATOR_LLM_MODEL",
@@ -61,6 +64,7 @@ LIVE2D_KEYS = [
     "LIVE2D_MODEL_SCALE",
     "LIVE2D_MODEL_X",
     "LIVE2D_MODEL_Y",
+    "TEXT_CHAT_BAR_Y_FACTOR",
     "FRONTEND_CLICK_THROUGH",
     "FRONTEND_DEFAULT_TTS_LANG",
 ]
@@ -113,6 +117,10 @@ FIELD_OPTIONS = {
     "TTS_PROMPT_LANGUAGE": ["zh", "en", "ja", "ko", "yue", "中文", "英文", "日文", "韩文", "粤语"],
 }
 
+SLIDER_FIELD_RANGES: Dict[str, tuple[int, int, int]] = {
+    "TEXT_CHAT_BAR_Y_FACTOR": (0, 100, 53),
+}
+
 FIELD_METADATA: Dict[str, Dict[str, str]] = {
     "GUI_OPERATOR_LLM_MODEL": {"label": "GUI 操作模型", "tooltip": "用于 GUI 自动操作能力的模型名称。"},
     "GUI_OPERATOR_LLM_BASE": {"label": "GUI 操作接口地址", "tooltip": "GUI 自动操作模型使用的 API Base URL。"},
@@ -136,6 +144,7 @@ FIELD_METADATA: Dict[str, Dict[str, str]] = {
     "LIVE2D_MODEL_SCALE": {"label": "Live2D 缩放", "tooltip": "模型在前端画布中的整体缩放比例。"},
     "LIVE2D_MODEL_X": {"label": "Live2D 横向位置", "tooltip": "模型 X 坐标；留空时由前端自动决定。"},
     "LIVE2D_MODEL_Y": {"label": "Live2D 纵向位置", "tooltip": "模型 Y 坐标；留空时由前端自动决定。"},
+    "TEXT_CHAT_BAR_Y_FACTOR": {"label": "文字对话框 Y 轴绑定", "tooltip": "控制文字对话框绑定在模型高度上的位置，取值范围 0 到 1。"},
     "FRONTEND_CLICK_THROUGH": {"label": "前端点击穿透", "tooltip": "开启后可让桌宠窗口忽略鼠标点击。"},
     "FRONTEND_DEFAULT_TTS_LANG": {"label": "默认 TTS 语言", "tooltip": "前端发送 TTS 请求时默认使用的语言。"},
     "TTS_MODE": {"label": "TTS 模式", "tooltip": "选择本地 TTS 或 OpenAI 兼容 TTS。"},
@@ -324,6 +333,11 @@ class ConfigerWindow(QMainWindow):
         self.speech_private_fields: Dict[str, FieldWidget] = {}
         self.agent_file_edits: Dict[str, QPlainTextEdit] = {}
         self.plugin_config_fields: Dict[str, FieldWidget] = {}
+        self.available_live2d_models: list[dict[str, str]] = []
+        self.live2d_download_process: subprocess.Popen | None = None
+        self.live2d_download_timer = QTimer(self)
+        self.live2d_download_timer.setInterval(1200)
+        self.live2d_download_timer.timeout.connect(self._poll_live2d_downloader)
 
         self._build_ui()
         self.refresh_all()
@@ -423,7 +437,18 @@ class ConfigerWindow(QMainWindow):
         self.live2d_form = QFormLayout(group)
         layout.addWidget(group)
 
+        action_row = QHBoxLayout()
+        self.live2d_apply_selected_btn = QPushButton("使用所选模型")
+        self.live2d_apply_selected_btn.clicked.connect(self._apply_selected_model_path)
+        self.live2d_download_btn = QPushButton("自动下载 Live2D 模型")
+        self.live2d_download_btn.clicked.connect(self._launch_live2d_downloader)
+        action_row.addWidget(self.live2d_apply_selected_btn)
+        action_row.addWidget(self.live2d_download_btn)
+        action_row.addStretch(1)
+        layout.addLayout(action_row)
+
         self.model_list = QListWidget()
+        self.model_list.itemSelectionChanged.connect(self._sync_selected_model_to_field)
         layout.addWidget(QLabel("可用模型"))
         layout.addWidget(self.model_list, 1)
 
@@ -861,6 +886,25 @@ class ConfigerWindow(QMainWindow):
 
     def _widget_from_value(self, key: str, value: Any) -> FieldWidget:
         value_type = type(value).__name__
+        if key in SLIDER_FIELD_RANGES:
+            minimum, maximum, default_value = SLIDER_FIELD_RANGES[key]
+            current_value = float(value if value is not None and value != "" else default_value / 100)
+            slider_value = max(minimum, min(maximum, int(round(current_value * 100))))
+            slider = QSlider(Qt.Horizontal)
+            slider.setRange(minimum, maximum)
+            slider.setValue(slider_value)
+            value_label = QLabel(f"{slider_value / 100:.2f}")
+            holder = QWidget()
+            layout = QHBoxLayout(holder)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.addWidget(slider, 1)
+            layout.addWidget(value_label)
+            holder._faust_slider = slider
+            holder._faust_value_label = value_label
+            slider.valueChanged.connect(lambda raw, label=value_label: label.setText(f"{raw / 100:.2f}"))
+            self._apply_field_tooltip(key, slider)
+            self._apply_field_tooltip(key, holder)
+            return FieldWidget(key=key, widget=holder, value_type="float")
         if key in FIELD_OPTIONS:
             w = QComboBox()
             options = [str(item) for item in FIELD_OPTIONS[key]]
@@ -899,6 +943,8 @@ class ConfigerWindow(QMainWindow):
             text = w.toPlainText()
         elif isinstance(w, QLineEdit):
             text = w.text()
+        elif hasattr(w, "_faust_slider"):
+            text = str(w._faust_slider.value() / 100)
         else:
             text = ""
 
@@ -1055,9 +1101,20 @@ class ConfigerWindow(QMainWindow):
         self.current_model_label.setText(f"默认模型: {model_path}")
         self.runtime_summary_view.setPlainText(json.dumps(runtime, ensure_ascii=False, indent=2))
 
+        self.available_live2d_models = list(runtime.get("available_models", []) or [])
         self.model_list.clear()
-        for model in runtime.get("available_models", []) or []:
-            self.model_list.addItem(f"{model.get('label', '-')}: {model.get('path', '-')}")
+        selected_row = -1
+        for idx, model in enumerate(self.available_live2d_models):
+            path = str(model.get("path") or "").strip()
+            label = str(model.get("label") or path or "-")
+            item = QListWidgetItem(f"{label} | {path}")
+            item.setData(Qt.UserRole, path)
+            item.setToolTip(path)
+            self.model_list.addItem(item)
+            if path and path == model_path:
+                selected_row = idx
+        if selected_row >= 0:
+            self.model_list.setCurrentRow(selected_row)
 
         self.agent_list.clear()
         for agent in runtime.get("agents", []) or []:
@@ -1623,6 +1680,13 @@ class ConfigerWindow(QMainWindow):
             public_values["TTS_PROMPT_LANGUAGE"] = self.tts_prompt_language_combo.currentText()
 
             self.api_request("POST", "/faust/admin/config", payload={"public": public_values, "private": private_values})
+            self.api_request("POST", "/faust/admin/live2d/apply", payload={
+                "LIVE2D_MODEL_PATH": public_values.get("LIVE2D_MODEL_PATH"),
+                "LIVE2D_MODEL_SCALE": public_values.get("LIVE2D_MODEL_SCALE"),
+                "LIVE2D_MODEL_X": public_values.get("LIVE2D_MODEL_X"),
+                "LIVE2D_MODEL_Y": public_values.get("LIVE2D_MODEL_Y"),
+                "TEXT_CHAT_BAR_Y_FACTOR": public_values.get("TEXT_CHAT_BAR_Y_FACTOR"),
+            })
             self.notify("配置已保存")
             self.load_config_view()
             self.load_runtime_summary()
@@ -1684,14 +1748,86 @@ class ConfigerWindow(QMainWindow):
         row = self.model_list.currentRow()
         if row < 0:
             return
-        text = self.model_list.currentItem().text()
-        path = text.split(":", 1)[1].strip() if ":" in text else text
+        item = self.model_list.currentItem()
+        path = str(item.data(Qt.UserRole) or "").strip() if item else ""
+        if not path:
+            return
         target = self.live2d_fields.get("LIVE2D_MODEL_PATH")
         if not target:
             return
         w = target.widget
         if isinstance(w, QLineEdit):
             w.setText(path)
+        elif isinstance(w, QPlainTextEdit):
+            w.setPlainText(path)
+        self.api_request("POST", "/faust/admin/live2d/apply", payload={"LIVE2D_MODEL_PATH": path})
+        self.notify(f"已切换当前 Live2D 模型: {path}")
+
+    def _sync_selected_model_to_field(self):
+        item = self.model_list.currentItem()
+        if not item:
+            return
+        path = str(item.data(Qt.UserRole) or "").strip()
+        if not path:
+            return
+        target = self.live2d_fields.get("LIVE2D_MODEL_PATH")
+        if not target:
+            return
+        widget = target.widget
+        current = self._field_value(target)
+        if current == path:
+            return
+        if isinstance(widget, QLineEdit):
+            widget.setText(path)
+        elif isinstance(widget, QPlainTextEdit):
+            widget.setPlainText(path)
+
+    def _launch_live2d_downloader(self):
+        if self.live2d_download_process and self.live2d_download_process.poll() is None:
+            self.notify("Live2D 下载任务仍在运行")
+            return
+        script_path = FRONTEND_ROOT / "download_live2d.bat"
+        if not script_path.exists():
+            QMessageBox.warning(self, "脚本不存在", f"未找到脚本:\n{script_path}")
+            return
+        try:
+            creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+            self.live2d_download_process = subprocess.Popen(
+                ["cmd.exe", "/c", str(script_path)],
+                cwd=str(FRONTEND_ROOT),
+                creationflags=creationflags,
+            )
+            self.live2d_download_btn.setEnabled(False)
+            self.live2d_download_timer.start()
+            self.notify("已启动 Live2D 下载脚本，完成后会自动刷新模型列表")
+        except Exception as e:
+            self.live2d_download_process = None
+            self.fail("启动 Live2D 下载脚本失败", e)
+
+    def _poll_live2d_downloader(self):
+        proc = self.live2d_download_process
+        if proc is None:
+            self.live2d_download_timer.stop()
+            self.live2d_download_btn.setEnabled(True)
+            return
+
+        exit_code = proc.poll()
+        if exit_code is None:
+            return
+
+        self.live2d_download_timer.stop()
+        self.live2d_download_process = None
+        self.live2d_download_btn.setEnabled(True)
+
+        if exit_code == 0:
+            try:
+                self.load_runtime_summary()
+                self.notify("Live2D 模型下载完成，模型列表已自动刷新")
+            except Exception as e:
+                self.fail("Live2D 下载完成，但刷新模型列表失败", e)
+            return
+
+        QMessageBox.warning(self, "下载失败", f"Live2D 下载脚本退出码为 {exit_code}，请检查下载窗口输出。")
 
     def _selected_agent_name(self) -> Optional[str]:
         item = self.agent_list.currentItem()

@@ -433,6 +433,11 @@ async def admin_runtime_summary_api():
     return {"status": "ok", "runtime": admin_runtime.runtime_summary()}
 
 
+@app.post("/faust/admin/live2d/apply")
+async def admin_apply_live2d(payload: dict | None = None):
+    return admin_runtime.apply_live2d_to_frontend(payload or {})
+
+
 @app.get("/faust/admin/services")
 async def admin_list_services(include_log: bool = False):
     return {"status": "ok", "items": service_manager.list_services(include_log=include_log)}

@@ -13,7 +13,7 @@ def download_and_extract_live2d_model(url, frontend_2d_path):
         frontend_2d_path (str): 前端2D模型的路径
     """
     # 下载文件
-    print(f"[Live2dDownloader]正在下载Live2D模型: {url}")
+    print(f"[Live2dDownloader]正在下载Live2D模型: {url},这可能需要一些时间，请耐心等待...")
     response = requests.get(url)
     extract_to = tempfile.mkdtemp()
     print(f"[Live2dDownloader]下载完成，正在解压到临时目录: {extract_to}")
@@ -36,9 +36,13 @@ def download_and_extract_live2d_model(url, frontend_2d_path):
     else:
         print(f"[Live2dDownloader]下载失败，状态码: {response.status_code}")
 if __name__ == "__main__":
+    print("[Live2dDownloader]开始下载和解压Live2D模型...")
+    print("警告:在运行这个程序时，你被视为同意Live2D Cubsim 示例数据的使用条款，参见https://cubism.live2d.com，如果不同意，请立刻关闭程序并删除下载的模型文件。")
+    download_and_extract_live2d_model("https://cubism.live2d.com/sample-data/bin/tororohijiki/tororo_hijiki.zip", "./2D")
     download_and_extract_live2d_model(
         url="https://cubism.live2d.com/sample-data/bin/ren_pro/ren_pro_zh.zip",
         frontend_2d_path="./2D")
     download_and_extract_live2d_model(
         url="https://cubism.live2d.com/sample-data/bin/hiyori_pro/hiyori_pro_zh.zip",
         frontend_2d_path="./2D")
+    print("[Live2dDownloader]所有模型下载和解压完成。")

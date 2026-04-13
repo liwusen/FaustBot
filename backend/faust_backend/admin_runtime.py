@@ -9,8 +9,10 @@ from datetime import datetime
 
 try:
     import faust_backend.config_loader as conf
+    import faust_backend.backend2front as backend2frontend
 except ImportError:
     import config_loader as conf
+    import backend2front as backend2frontend
 
 BACKEND_ROOT = Path(conf.CONFIG_ROOT)
 AGENTS_ROOT = BACKEND_ROOT / "agents"
@@ -48,6 +50,7 @@ PUBLIC_CONFIG_DEFAULTS = {
     "LIVE2D_MODEL_SCALE": 0.3,
     "LIVE2D_MODEL_X": None,
     "LIVE2D_MODEL_Y": None,
+    "TEXT_CHAT_BAR_Y_FACTOR": 0.53,
     "FRONTEND_CLICK_THROUGH": True,
     "FRONTEND_DEFAULT_TTS_LANG": "zh",
     "TTS_MODE": "local",
@@ -325,6 +328,36 @@ def runtime_summary() -> Dict[str, Any]:
         "private_config": get_private_config(mask_secrets=True),
         "available_models": list_available_models(),
         "agents": list_agents(),
+    }
+
+
+def apply_live2d_to_frontend(payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    payload = payload or {}
+    public_cfg = get_public_config()
+    model_path = str(payload.get("LIVE2D_MODEL_PATH") or public_cfg.get("LIVE2D_MODEL_PATH") or "").strip()
+    model_scale = payload.get("LIVE2D_MODEL_SCALE", public_cfg.get("LIVE2D_MODEL_SCALE"))
+    model_x = payload.get("LIVE2D_MODEL_X", public_cfg.get("LIVE2D_MODEL_X"))
+    model_y = payload.get("LIVE2D_MODEL_Y", public_cfg.get("LIVE2D_MODEL_Y"))
+    text_chat_y_factor = payload.get("TEXT_CHAT_BAR_Y_FACTOR", public_cfg.get("TEXT_CHAT_BAR_Y_FACTOR"))
+
+    if model_path:
+        backend2frontend.FrontEndLoadModel(model_path)
+    if model_scale not in (None, ""):
+        backend2frontend.FrontEndSetModelScale(model_scale)
+    if model_x not in (None, "") and model_y not in (None, ""):
+        backend2frontend.FrontEndSetModelPosition(model_x, model_y)
+    if text_chat_y_factor not in (None, ""):
+        backend2frontend.FrontEndSetTextChatYFactor(text_chat_y_factor)
+
+    return {
+        "status": "ok",
+        "applied": {
+            "LIVE2D_MODEL_PATH": model_path,
+            "LIVE2D_MODEL_SCALE": model_scale,
+            "LIVE2D_MODEL_X": model_x,
+            "LIVE2D_MODEL_Y": model_y,
+            "TEXT_CHAT_BAR_Y_FACTOR": text_chat_y_factor,
+        },
     }
 
 

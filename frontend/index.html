@@ -33,7 +33,10 @@
       <progress id="vadProb" value="0" max="1"></progress>
       <span id="vadProbLabel">0%</span>
     </div>
-    <div id="asrText"></div>
+    <div id="asrBubble" data-source="ai" style="display:none;">
+      <div id="asrText"></div>
+      <button id="hideAsrBubbleBtn" type="button" aria-label="隐藏返回结果" title="隐藏返回结果">×</button>
+    </div>
     <div id="modelQuickController" aria-label="模型快捷控制器">
       <button id="quickToggleAsr" type="button" title="启动/停止语音识别">
         <span class="qc-icon" aria-hidden="true">🎤</span>

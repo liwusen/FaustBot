@@ -4,6 +4,7 @@
 (() => {
 
   const defaultModel = '2D/hiyori_pro_zh/hiyori_pro_t11.model3.json';
+  const ADMIN_RUNTIME_ENDPOINT = 'http://127.0.0.1:13900/faust/admin/runtime';
 
   const modelPathInput = document.getElementById('modelPath');
   const loadBtn = document.getElementById('loadBtn');
@@ -22,7 +23,9 @@
   const stopAsrBtn = document.getElementById('stopAsrBtn');
   const asrStatusEl = document.getElementById('asrStatus');
   const chatStatusEl = document.getElementById('chatStatus');
+  const asrBubbleEl = document.getElementById('asrBubble');
   const asrTextEl = document.getElementById('asrText');
+  const hideAsrBubbleBtn = document.getElementById('hideAsrBubbleBtn');
   const vadProbEl = document.getElementById('vadProb');
   const vadProbLabel = document.getElementById('vadProbLabel');
   const textChatInput = document.getElementById('textChatInput');
@@ -52,6 +55,9 @@
   let asrBubbleInitialized = false;
   let asrBubbleSource = 'ai';
   let asrTextPinnedToBottom = true;
+  let currentLipSyncParamIds = ['ParamMouthOpenY'];
+  let activeModelLoadRequestId = 0;
+  let textChatBarYFactor = 0.53;
 
   function ensureNimbleHost(){
     let host = document.getElementById('nimble-host');
@@ -190,6 +196,21 @@
   let baseScale = 1;
   let scaleFactor = parseFloat(modelScaleSlider ? modelScaleSlider.value : 1.0) || 1.0;
   let _savedModelState = null;
+  let runtimeLive2DConfig = null;
+
+  async function loadRuntimeLive2DConfig(){
+    try{
+      const r = await fetch(ADMIN_RUNTIME_ENDPOINT);
+      const j = await r.json().catch(()=>({}));
+      if (!r.ok || !j || j.error) throw new Error((j && (j.detail || j.error)) || `HTTP ${r.status}`);
+      runtimeLive2DConfig = ((j.runtime || {}).public_config) || {};
+      return runtimeLive2DConfig;
+    }catch(e){
+      console.warn('load runtime live2d config failed', e);
+      runtimeLive2DConfig = null;
+      return null;
+    }
+  }
 
   function applyModelScale(){
     if (!currentModel) return;
@@ -228,6 +249,32 @@
   function extractMotionNames(modelDef){
     const motions = (((modelDef || {}).FileReferences || {}).Motions) || {};
     return Object.keys(motions);
+  }
+
+  function extractLipSyncParamIds(modelDef){
+    const groups = Array.isArray(modelDef && modelDef.Groups) ? modelDef.Groups : [];
+    for (const group of groups){
+      if (String(group && group.Target || '').trim() !== 'Parameter') continue;
+      if (String(group && group.Name || '').trim().toLowerCase() !== 'lipsync') continue;
+      const ids = Array.isArray(group && group.Ids) ? group.Ids.map((item)=>String(item || '').trim()).filter(Boolean) : [];
+      if (ids.length) return ids;
+    }
+    return ['ParamMouthOpenY'];
+  }
+
+  function setModelLipSyncValue(value){
+    if (!currentModel) return;
+    const mouth = Math.max(0, Math.min(1, Number(value) || 0));
+    const ids = Array.isArray(currentLipSyncParamIds) && currentLipSyncParamIds.length ? currentLipSyncParamIds : ['ParamMouthOpenY'];
+    try{
+      if (currentModel.internalModel && currentModel.internalModel.coreModel && typeof currentModel.internalModel.coreModel.setParameterValueById === 'function'){
+        for (const paramId of ids) currentModel.internalModel.coreModel.setParameterValueById(paramId, mouth);
+        return;
+      }
+      if (typeof currentModel.setMouthOpenY === 'function'){
+        currentModel.setMouthOpenY(mouth);
+      }
+    }catch(e){ /* ignore if model API differs */ }
   }
 
   function updateQuickAsrButton(){
@@ -277,6 +324,12 @@
   function isPointOverQuickController(clientX, clientY){
     if (!quickController) return false;
     const rect = quickController.getBoundingClientRect();
+    return rect.width > 0 && clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+  }
+
+  function isPointOverAsrBubble(clientX, clientY){
+    if (!asrBubbleEl || asrBubbleEl.style.display === 'none') return false;
+    const rect = asrBubbleEl.getBoundingClientRect();
     return rect.width > 0 && clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
   }
 
@@ -780,6 +833,11 @@
       } else if (cmd === 'SET_MODEL_SCALE'){
         if (!arg) return;
         setScaleFactor(parseFloat(arg));
+      } else if (cmd === 'SET_TEXT_CHAT_Y_FACTOR'){
+        const next = Number(arg);
+        if (!Number.isFinite(next)) return;
+        textChatBarYFactor = Math.max(0, Math.min(1, next));
+        updateTextChatBarPosition();
       } else if (cmd === 'SET_MODEL_POSITION'){
         if (!currentModel || !arg) return;
         const [xRaw, yRaw] = arg.split(/\s+/);
@@ -1089,33 +1147,39 @@
     }
   }
 
+  function hideResultBubble(){
+    if (!asrBubbleEl) return;
+    asrBubbleEl.style.display = 'none';
+    asrBubbleInitialized = false;
+  }
+
   function showResultBubble(source, text){
-    if (!asrTextEl) return;
+    if (!asrTextEl || !asrBubbleEl) return;
     asrBubbleSource = source || 'ai';
-    asrTextEl.dataset.source = asrBubbleSource;
+    asrBubbleEl.dataset.source = asrBubbleSource;
     const formatted = formatResultBubbleText(asrBubbleSource, text);
     rememberAsrScrollIntent();
-    asrTextEl.style.display = formatted ? 'block' : 'none';
+    asrBubbleEl.style.display = formatted ? 'flex' : 'none';
     asrTextEl.textContent = formatted;
     if (formatted) {
       updateAsrTextPosition(true);
-      scrollAsrTextToBottom();
+      scrollAsrTextToBottom(true);
     }
   }
 
   function showAsrText(text){
-    if (!asrTextEl) return;
+    if (!asrTextEl || !asrBubbleEl) return;
     rememberAsrScrollIntent();
-    asrTextEl.style.display = text ? 'block' : 'none';
-    asrTextEl.dataset.source = 'ai';
+    asrBubbleEl.style.display = text ? 'flex' : 'none';
+    asrBubbleEl.dataset.source = 'ai';
     asrBubbleSource = 'ai';
     asrTextEl.textContent = formatResultBubbleText('ai', text || '');
     updateAsrTextPosition(true);
-    scrollAsrTextToBottom();
+    scrollAsrTextToBottom(true);
   }
 
   function updateAsrTextPosition(forceSnap = false){
-    if (!asrTextEl || !currentModel || !app || !app.renderer) return;
+    if (!asrBubbleEl || !asrTextEl || !currentModel || !app || !app.renderer) return;
     try{
       const canvasRect = app.renderer.view.getBoundingClientRect();
       const b = currentModel.getBounds();
@@ -1123,8 +1187,8 @@
       const clientX = canvasRect.left + (b.x + b.width/2) * (canvasRect.width / app.renderer.width);
       const clientY = canvasRect.top + (b.y) * (canvasRect.height / app.renderer.height);
       // position slightly above head
-      const offsetY = -36;
-      const bubbleWidth = Math.max(asrTextEl.offsetWidth, 180);
+      const offsetY = -108;
+      const bubbleWidth = Math.max(asrBubbleEl.offsetWidth, 220);
       asrBubbleTargetX = clientX - bubbleWidth / 2;
       asrBubbleTargetY = clientY + offsetY;
       if (!asrBubbleInitialized || forceSnap){
@@ -1136,8 +1200,8 @@
         asrBubbleCurrentX += (asrBubbleTargetX - asrBubbleCurrentX) * smooth;
         asrBubbleCurrentY += (asrBubbleTargetY - asrBubbleCurrentY) * smooth;
       }
-      asrTextEl.style.left = Math.round(asrBubbleCurrentX) + 'px';
-      asrTextEl.style.top = Math.round(asrBubbleCurrentY) + 'px';
+      asrBubbleEl.style.left = Math.round(asrBubbleCurrentX) + 'px';
+      asrBubbleEl.style.top = Math.round(asrBubbleCurrentY) + 'px';
       asrTextEl.style.fontSize = '20px';
     }catch(e){/*ignore*/}
   }
@@ -1151,7 +1215,7 @@
       const scaleX = canvasRect.width / app.renderer.width;
       const scaleY = canvasRect.height / app.renderer.height;
       const clientX = canvasRect.left + (b.x + b.width * 0.5) * scaleX;
-      const waistY = canvasRect.top + (b.y + b.height * 0.53) * scaleY;
+      const waistY = canvasRect.top + (b.y + b.height * textChatBarYFactor) * scaleY;
       const rect = textChatBar.getBoundingClientRect();
       const estimatedWidth = rect.width > 0 ? rect.width : 420;
       const estimatedHeight = rect.height > 0 ? rect.height : 64;
@@ -1365,7 +1429,7 @@
 
   // update asrText position each frame if visible
   function rafUpdate(){
-    if (asrTextEl && asrTextEl.style.display !== 'none') updateAsrTextPosition();
+    if (asrBubbleEl && asrBubbleEl.style.display !== 'none') updateAsrTextPosition();
     if (quickController && currentModel) updateQuickControllerPosition();
     updateTextChatBarPosition();
     requestAnimationFrame(rafUpdate);
@@ -1387,6 +1451,7 @@
   }
 
   function loadModel(path){
+    const loadRequestId = ++activeModelLoadRequestId;
     console.log('Loading model:', path);
     // determine Live2DModel constructor (try window.Live2DModel, then PIXI.live2d)
     Live2DModel = (typeof window !== 'undefined' && window.Live2DModel) ? window.Live2DModel : (PIXI && PIXI.live2d && PIXI.live2d.Live2DModel);
@@ -1396,9 +1461,12 @@
     }
     showOverlay('加载模型: ' + path);
     readModelDefinition(path).then((modelDef)=>{
+      if (loadRequestId !== activeModelLoadRequestId) throw new Error('stale model load request');
       availableMotions = extractMotionNames(modelDef);
+      currentLipSyncParamIds = extractLipSyncParamIds(modelDef);
       return Live2DModel.from(path);
     }).then(model => {
+      if (loadRequestId !== activeModelLoadRequestId) return;
       // 移除上个模型
       if (currentModel && currentModel.parent) app.stage.removeChild(currentModel);
       currentModel = model;
@@ -1461,7 +1529,10 @@
 
       updateTextChatBarPosition();
       refreshQuickControllerVisibility();
+      if (modelPathInput) modelPathInput.value = path;
+      saveModelState();
     }).catch(err => {
+      if (String(err && err.message || '') === 'stale model load request') return;
       showOverlay('加载模型失败：' + err);
       console.error(err);
     });
@@ -1477,14 +1548,35 @@
     currentModel.x = app.renderer.width - 200;
     currentModel.y = app.renderer.height - 10;
     updateQuickControllerPosition();
+    saveModelState();
   });
 
   // 自动尝试加载默认或保存的模型路径/状态
   modelPathInput.value = defaultModel;
   (async ()=>{
     await refreshSpeechRuntimeConfig(true);
+    const runtimeCfg = await loadRuntimeLive2DConfig();
     const st = await loadModelState();
-    const toLoad = (st && st.modelPath) ? st.modelPath : defaultModel;
+    const configuredModel = runtimeCfg && runtimeCfg.LIVE2D_MODEL_PATH ? String(runtimeCfg.LIVE2D_MODEL_PATH).trim() : '';
+    const configuredScale = runtimeCfg && runtimeCfg.LIVE2D_MODEL_SCALE !== undefined && runtimeCfg.LIVE2D_MODEL_SCALE !== null && runtimeCfg.LIVE2D_MODEL_SCALE !== ''
+      ? Number(runtimeCfg.LIVE2D_MODEL_SCALE)
+      : null;
+    const configuredTextChatYFactor = runtimeCfg && runtimeCfg.TEXT_CHAT_BAR_Y_FACTOR !== undefined && runtimeCfg.TEXT_CHAT_BAR_Y_FACTOR !== null && runtimeCfg.TEXT_CHAT_BAR_Y_FACTOR !== ''
+      ? Number(runtimeCfg.TEXT_CHAT_BAR_Y_FACTOR)
+      : null;
+    if (Number.isFinite(configuredScale) && configuredScale > 0) {
+      scaleFactor = configuredScale;
+      if (modelScaleSlider) modelScaleSlider.value = String(scaleFactor);
+      if (modelScaleValue) modelScaleValue.textContent = scaleFactor.toFixed(2) + 'x';
+    } else if (st && typeof st.scaleFactor === 'number') {
+      scaleFactor = st.scaleFactor;
+      if (modelScaleSlider) modelScaleSlider.value = String(scaleFactor);
+      if (modelScaleValue) modelScaleValue.textContent = scaleFactor.toFixed(2) + 'x';
+    }
+    if (Number.isFinite(configuredTextChatYFactor)) {
+      textChatBarYFactor = Math.max(0, Math.min(1, configuredTextChatYFactor));
+    }
+    const toLoad = configuredModel || ((st && st.modelPath) ? st.modelPath : defaultModel);
     modelPathInput.value = toLoad;
     // small delay so UI visible
     setTimeout(()=>{ loadModel(toLoad); }, 120);
@@ -1534,7 +1626,8 @@
       function onGlobalMouseMove(e){
         hoverQuickController = isPointOverQuickController(e.clientX, e.clientY);
         hoverModel = isPointerOnModel(e.clientX, e.clientY);
-        const overInteractive = hoverQuickController || hoverModel || dragging || interactionLocked;
+        const overAsrBubble = isPointOverAsrBubble(e.clientX, e.clientY);
+        const overInteractive = hoverQuickController || hoverModel || overAsrBubble || dragging || interactionLocked;
         if (overInteractive){
           if (!interactiveActive){
             interactiveActive = true;
@@ -1631,11 +1724,7 @@
     }
     if (currentModel){
       try{
-        if (currentModel.internalModel && currentModel.internalModel.coreModel && typeof currentModel.internalModel.coreModel.setParameterValueById === 'function'){
-          currentModel.internalModel.coreModel.setParameterValueById('ParamMouthOpenY', 0);
-        } else if (typeof currentModel.setMouthOpenY === 'function'){
-          currentModel.setMouthOpenY(0);
-        }
+        setModelLipSyncValue(0);
       }catch(e){}
     }
     if (rafId) cancelAnimationFrame(rafId);
@@ -1785,11 +1874,7 @@
     analyser.connect(audioCtx.destination);
     audioEl.onended = ()=>{
       try{
-        if (currentModel && currentModel.internalModel && currentModel.internalModel.coreModel && typeof currentModel.internalModel.coreModel.setParameterValueById === 'function'){
-          currentModel.internalModel.coreModel.setParameterValueById('ParamMouthOpenY', 0);
-        } else if (currentModel && typeof currentModel.setMouthOpenY === 'function'){
-          currentModel.setMouthOpenY(0);
-        }
+        setModelLipSyncValue(0);
       }catch(e){}
     };
     audioEl.play().catch(()=>{ /* autoplay may be blocked */ });
@@ -1804,16 +1889,7 @@
       const mouth = Math.min(1, Math.max(0, (rms*5)));
       if (currentModel){
         try{
-          // Try common parameter id
-          if (currentModel.internalModel && currentModel.internalModel.coreModel && typeof currentModel.internalModel.coreModel.setParameterValueById === 'function'){
-            currentModel.internalModel.coreModel.setParameterValueById('ParamMouthOpenY', mouth);
-          } else if (currentModel.internalModel && currentModel.internalModel.coreModel && currentModel.internalModel.coreModel.parameters){
-            // fallback: attempt to set by parameter object
-            const p = currentModel.internalModel.coreModel.parameters['ParamMouthOpenY'];
-            if (p && typeof p.setValue === 'function') p.setValue(mouth);
-          } else if (typeof currentModel.setMouthOpenY === 'function'){
-            currentModel.setMouthOpenY(mouth);
-          }
+          setModelLipSyncValue(mouth);
         }catch(e){ /* ignore if model API differs */ }
       }
       rafId = requestAnimationFrame(tick);
@@ -1860,14 +1936,19 @@
       refreshQuickControllerVisibility();
     });
   }
-  if (asrTextEl){
+  if (asrBubbleEl){
     asrTextEl.addEventListener('scroll', ()=>{ rememberAsrScrollIntent(); });
-    asrTextEl.addEventListener('mouseenter', ()=>{
+    asrBubbleEl.addEventListener('mouseenter', ()=>{
       if (clickThroughController) clickThroughController.forceInteractive();
     });
-    asrTextEl.addEventListener('wheel', ()=>{
+    asrBubbleEl.addEventListener('wheel', ()=>{
       if (clickThroughController) clickThroughController.forceInteractive();
     }, { passive: true });
+  }
+  if (hideAsrBubbleBtn){
+    hideAsrBubbleBtn.addEventListener('click', ()=>{
+      hideResultBubble();
+    });
   }
   if (trayToggleBtn) trayToggleBtn.addEventListener('click', async ()=>{
     try{
