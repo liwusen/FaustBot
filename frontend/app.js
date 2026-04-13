@@ -5,6 +5,7 @@
 
   const defaultModel = '2D/hiyori_pro_zh/hiyori_pro_t11.model3.json';
   const ADMIN_RUNTIME_ENDPOINT = 'http://127.0.0.1:13900/faust/admin/runtime';
+  const ADMIN_CONFIG_ENDPOINT = 'http://127.0.0.1:13900/faust/admin/config';
 
   const modelPathInput = document.getElementById('modelPath');
   const loadBtn = document.getElementById('loadBtn');
@@ -197,6 +198,7 @@
   let scaleFactor = parseFloat(modelScaleSlider ? modelScaleSlider.value : 1.0) || 1.0;
   let _savedModelState = null;
   let runtimeLive2DConfig = null;
+  let lastPersistedModelPosition = null;
 
   async function loadRuntimeLive2DConfig(){
     try{
@@ -228,6 +230,34 @@
     scaleFactor = Math.max(0.1, Math.min(2.0, Number.isFinite(parsed) ? parsed : scaleFactor));
     applyModelScale();
     try{ saveModelState(); }catch(e){}
+  }
+
+  async function persistModelPositionToBackend(force = false){
+    if (!currentModel) return;
+    const x = Math.round(Number(currentModel.x) || 0);
+    const y = Math.round(Number(currentModel.y) || 0);
+    if (!force && lastPersistedModelPosition && lastPersistedModelPosition.x === x && lastPersistedModelPosition.y === y) return;
+    try{
+      const r = await fetch(ADMIN_CONFIG_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          public: {
+            LIVE2D_MODEL_X: x,
+            LIVE2D_MODEL_Y: y,
+          }
+        })
+      });
+      const j = await r.json().catch(()=>({}));
+      if (!r.ok || (j && j.error)) throw new Error((j && (j.detail || j.error)) || `HTTP ${r.status}`);
+      lastPersistedModelPosition = { x, y };
+      if (runtimeLive2DConfig && typeof runtimeLive2DConfig === 'object') {
+        runtimeLive2DConfig.LIVE2D_MODEL_X = x;
+        runtimeLive2DConfig.LIVE2D_MODEL_Y = y;
+      }
+    }catch(e){
+      console.warn('persistModelPositionToBackend failed', e);
+    }
   }
 
   function nudgeScale(step){
@@ -847,6 +877,7 @@
         if (Number.isFinite(y)) currentModel.y = y;
         updateQuickControllerPosition();
         saveModelState();
+        persistModelPositionToBackend(true);
       } else if (cmd === 'START_ASR'){
         startRecording();
       } else if (cmd === 'STOP_ASR'){
@@ -1493,11 +1524,14 @@
         dragging = false;
         model.cursor = 'grab';
         setInteractionLock(false);
+        persistModelPositionToBackend();
       });
       model.on('pointerupoutside', () => {
         dragging = false;
         model.cursor = 'grab';
         setInteractionLock(false);
+        persistModelPositionToBackend();
+        saveModelState();
       });
       // save state after dragging ends
       model.on('pointerup', () => { saveModelState(); });
@@ -1549,6 +1583,7 @@
     currentModel.y = app.renderer.height - 10;
     updateQuickControllerPosition();
     saveModelState();
+    persistModelPositionToBackend();
   });
 
   // 自动尝试加载默认或保存的模型路径/状态

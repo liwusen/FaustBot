@@ -40,3 +40,5 @@ langgraph-checkpoint-sqlite==3.0.3
 
 #
 tqdm
+
+pipmaster
