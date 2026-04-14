@@ -65,6 +65,7 @@ LIVE2D_KEYS = [
     "LIVE2D_MODEL_X",
     "LIVE2D_MODEL_Y",
     "TEXT_CHAT_BAR_Y_FACTOR",
+    "FRONTEND_QUICK_CONTROLLER_X_OFFSET",
     "FRONTEND_CLICK_THROUGH",
     "FRONTEND_DEFAULT_TTS_LANG",
 ]
@@ -121,6 +122,10 @@ SLIDER_FIELD_RANGES: Dict[str, tuple[int, int, int]] = {
     "TEXT_CHAT_BAR_Y_FACTOR": (0, 100, 53),
 }
 
+SPINBOX_FIELD_RANGES: Dict[str, tuple[int, int, int]] = {
+    "FRONTEND_QUICK_CONTROLLER_X_OFFSET": (-400, 400, -12),
+}
+
 FIELD_METADATA: Dict[str, Dict[str, str]] = {
     "GUI_OPERATOR_LLM_MODEL": {"label": "GUI 操作模型", "tooltip": "用于 GUI 自动操作能力的模型名称。"},
     "GUI_OPERATOR_LLM_BASE": {"label": "GUI 操作接口地址", "tooltip": "GUI 自动操作模型使用的 API Base URL。"},
@@ -145,6 +150,7 @@ FIELD_METADATA: Dict[str, Dict[str, str]] = {
     "LIVE2D_MODEL_X": {"label": "Live2D 横向位置", "tooltip": "模型 X 坐标；留空时由前端自动决定。"},
     "LIVE2D_MODEL_Y": {"label": "Live2D 纵向位置", "tooltip": "模型 Y 坐标；留空时由前端自动决定。"},
     "TEXT_CHAT_BAR_Y_FACTOR": {"label": "文字对话框 Y 轴绑定", "tooltip": "控制文字对话框绑定在模型高度上的位置，取值范围 0 到 1。"},
+    "FRONTEND_QUICK_CONTROLLER_X_OFFSET": {"label": "快捷控制栏 X 偏移", "tooltip": "控制前端快捷控制栏相对模型锚点的横向偏移，单位为像素。"},
     "FRONTEND_CLICK_THROUGH": {"label": "前端点击穿透", "tooltip": "开启后可让桌宠窗口忽略鼠标点击。"},
     "FRONTEND_DEFAULT_TTS_LANG": {"label": "默认 TTS 语言", "tooltip": "前端发送 TTS 请求时默认使用的语言。"},
     "TTS_MODE": {"label": "TTS 模式", "tooltip": "选择本地 TTS 或 OpenAI 兼容 TTS。"},
@@ -905,6 +911,14 @@ class ConfigerWindow(QMainWindow):
             self._apply_field_tooltip(key, slider)
             self._apply_field_tooltip(key, holder)
             return FieldWidget(key=key, widget=holder, value_type="float")
+        if key in SPINBOX_FIELD_RANGES:
+            minimum, maximum, default_value = SPINBOX_FIELD_RANGES[key]
+            current_value = default_value if value is None or value == "" else int(value)
+            spin = QSpinBox()
+            spin.setRange(minimum, maximum)
+            spin.setValue(max(minimum, min(maximum, current_value)))
+            self._apply_field_tooltip(key, spin)
+            return FieldWidget(key=key, widget=spin, value_type="int")
         if key in FIELD_OPTIONS:
             w = QComboBox()
             options = [str(item) for item in FIELD_OPTIONS[key]]
@@ -943,6 +957,8 @@ class ConfigerWindow(QMainWindow):
             text = w.toPlainText()
         elif isinstance(w, QLineEdit):
             text = w.text()
+        elif isinstance(w, QSpinBox):
+            text = str(w.value())
         elif hasattr(w, "_faust_slider"):
             text = str(w._faust_slider.value() / 100)
         else:
@@ -1686,6 +1702,7 @@ class ConfigerWindow(QMainWindow):
                 "LIVE2D_MODEL_X": public_values.get("LIVE2D_MODEL_X"),
                 "LIVE2D_MODEL_Y": public_values.get("LIVE2D_MODEL_Y"),
                 "TEXT_CHAT_BAR_Y_FACTOR": public_values.get("TEXT_CHAT_BAR_Y_FACTOR"),
+                "FRONTEND_QUICK_CONTROLLER_X_OFFSET": public_values.get("FRONTEND_QUICK_CONTROLLER_X_OFFSET"),
             })
             self.notify("配置已保存")
             self.load_config_view()

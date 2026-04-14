@@ -51,6 +51,7 @@ PUBLIC_CONFIG_DEFAULTS = {
     "LIVE2D_MODEL_X": None,
     "LIVE2D_MODEL_Y": None,
     "TEXT_CHAT_BAR_Y_FACTOR": 0.53,
+    "FRONTEND_QUICK_CONTROLLER_X_OFFSET": -12,
     "FRONTEND_CLICK_THROUGH": True,
     "FRONTEND_DEFAULT_TTS_LANG": "zh",
     "TTS_MODE": "local",
@@ -339,6 +340,7 @@ def apply_live2d_to_frontend(payload: Dict[str, Any] | None = None) -> Dict[str,
     model_x = payload.get("LIVE2D_MODEL_X", public_cfg.get("LIVE2D_MODEL_X"))
     model_y = payload.get("LIVE2D_MODEL_Y", public_cfg.get("LIVE2D_MODEL_Y"))
     text_chat_y_factor = payload.get("TEXT_CHAT_BAR_Y_FACTOR", public_cfg.get("TEXT_CHAT_BAR_Y_FACTOR"))
+    quick_controller_x_offset = payload.get("FRONTEND_QUICK_CONTROLLER_X_OFFSET", public_cfg.get("FRONTEND_QUICK_CONTROLLER_X_OFFSET"))
 
     if model_path:
         backend2frontend.FrontEndLoadModel(model_path)
@@ -348,6 +350,8 @@ def apply_live2d_to_frontend(payload: Dict[str, Any] | None = None) -> Dict[str,
         backend2frontend.FrontEndSetModelPosition(model_x, model_y)
     if text_chat_y_factor not in (None, ""):
         backend2frontend.FrontEndSetTextChatYFactor(text_chat_y_factor)
+    if quick_controller_x_offset not in (None, ""):
+        backend2frontend.FrontEndSetQuickControllerXOffset(quick_controller_x_offset)
 
     return {
         "status": "ok",
@@ -357,6 +361,7 @@ def apply_live2d_to_frontend(payload: Dict[str, Any] | None = None) -> Dict[str,
             "LIVE2D_MODEL_X": model_x,
             "LIVE2D_MODEL_Y": model_y,
             "TEXT_CHAT_BAR_Y_FACTOR": text_chat_y_factor,
+            "FRONTEND_QUICK_CONTROLLER_X_OFFSET": quick_controller_x_offset,
         },
     }
 

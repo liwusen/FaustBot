@@ -43,6 +43,8 @@
   let Live2DModel=null;
   let nimbleWindows = new Map();
   let activeNimbleContext = null;
+  let hilApprovalQueue = [];
+  let activeHilApproval = null;
   let textChatSending = false;
   let availableMotions = [];
   let hoverModel = false;
@@ -59,6 +61,7 @@
   let currentLipSyncParamIds = ['ParamMouthOpenY'];
   let activeModelLoadRequestId = 0;
   let textChatBarYFactor = 0.53;
+  let quickControllerXOffset = -12;
 
   function ensureNimbleHost(){
     let host = document.getElementById('nimble-host');
@@ -178,6 +181,176 @@
     nimbleWindows.set(payload.callback_id, shell);
   }
 
+  function ensureHilApprovalHost(){
+    let host = document.getElementById('hil-approval-host');
+    if (host) return host;
+    host = document.createElement('div');
+    host.id = 'hil-approval-host';
+    host.style.position = 'fixed';
+    host.style.left = '0';
+    host.style.top = '0';
+    host.style.zIndex = '2600';
+    host.style.pointerEvents = 'none';
+    document.body.appendChild(host);
+    return host;
+  }
+
+  function updateHilApprovalPosition(){
+    const host = document.getElementById('hil-approval-host');
+    if (!host) return;
+    const shell = host.querySelector('.hil-approval-shell');
+    if (!shell) return;
+    const bubbleVisible = !!(asrBubbleEl && asrBubbleEl.style.display !== 'none');
+    const anchorRect = bubbleVisible && asrBubbleEl ? asrBubbleEl.getBoundingClientRect() : null;
+    const shellRect = shell.getBoundingClientRect();
+    const preferredWidth = Math.min(Math.max(anchorRect ? anchorRect.width : 320, 320), 560);
+    shell.style.width = Math.round(preferredWidth) + 'px';
+    const measuredRect = shell.getBoundingClientRect();
+    const width = measuredRect.width || preferredWidth;
+    const height = measuredRect.height || 320;
+    const gap = 14;
+    let left = anchorRect ? (anchorRect.left + anchorRect.width / 2 - width / 2) : ((window.innerWidth - width) / 2);
+    let top = anchorRect ? (anchorRect.top - height - gap) : 80;
+    left = Math.max(12, Math.min(window.innerWidth - width - 12, left));
+    top = Math.max(12, Math.min(window.innerHeight - height - 12, top));
+    host.style.left = Math.round(left) + 'px';
+    host.style.top = Math.round(top) + 'px';
+  }
+
+  function isPointOverHilApproval(clientX, clientY){
+    const host = document.getElementById('hil-approval-host');
+    if (!host) return false;
+    const panel = host.querySelector('.hil-approval-shell');
+    if (!panel) return false;
+    const rect = panel.getBoundingClientRect();
+    return rect.width > 0 && clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+  }
+
+  async function submitHilApprovalDecision(requestId, approved, reason){
+    const r = await fetch(HIL_FEEDBACK_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        request_id: requestId,
+        feedback: !!approved,
+        reason: String(reason || '').trim() || (approved ? 'approved' : 'rejected'),
+      })
+    });
+    const j = await r.json().catch(()=>({}));
+    if (!r.ok || j.error) throw new Error((j && (j.detail || j.error)) || `HTTP ${r.status}`);
+    return j;
+  }
+
+  function closeHilApproval(requestId){
+    const host = document.getElementById('hil-approval-host');
+    if (host) host.innerHTML = '';
+    if (activeHilApproval && activeHilApproval.request_id === requestId) {
+      activeHilApproval = null;
+    } else {
+      hilApprovalQueue = hilApprovalQueue.filter((item)=>item && item.request_id !== requestId);
+    }
+    window.setTimeout(()=>renderNextHilApproval(), 0);
+  }
+
+  function renderNextHilApproval(){
+    if (activeHilApproval || !hilApprovalQueue.length) return;
+    const payload = hilApprovalQueue.shift();
+    if (!payload || !payload.request_id) return;
+    activeHilApproval = payload;
+    const host = ensureHilApprovalHost();
+    host.innerHTML = '';
+
+    const overlay = document.createElement('div');
+    overlay.className = 'hil-approval-overlay';
+
+    const shell = document.createElement('section');
+    shell.className = 'hil-approval-shell';
+    shell.dataset.requestId = payload.request_id;
+    shell.dataset.severity = String(payload.severity || 'warning');
+
+    const title = document.createElement('h3');
+    title.className = 'hil-approval-title';
+    title.textContent = String(payload.title || '需要人工确认');
+
+    const badge = document.createElement('span');
+    badge.className = 'hil-approval-badge';
+    badge.textContent = String(payload.severity || 'warning').toUpperCase();
+
+    const summary = document.createElement('pre');
+    summary.className = 'hil-approval-summary';
+    summary.textContent = String(payload.summary || '');
+
+    const requestMeta = document.createElement('div');
+    requestMeta.className = 'hil-approval-meta';
+    requestMeta.textContent = `请求ID: ${payload.request_id}`;
+
+    const reasonInput = document.createElement('textarea');
+    reasonInput.className = 'hil-approval-reason';
+    reasonInput.placeholder = '可选：填写审批备注或拒绝原因';
+
+    const actionRow = document.createElement('div');
+    actionRow.className = 'hil-approval-actions';
+
+    const rejectBtn = document.createElement('button');
+    rejectBtn.type = 'button';
+    rejectBtn.className = 'hil-approval-btn secondary';
+    rejectBtn.textContent = '拒绝';
+
+    const approveBtn = document.createElement('button');
+    approveBtn.type = 'button';
+    approveBtn.className = 'hil-approval-btn primary';
+    approveBtn.textContent = '批准';
+
+    const setBusy = (busy)=>{
+      approveBtn.disabled = busy;
+      rejectBtn.disabled = busy;
+      reasonInput.disabled = busy;
+    };
+
+    rejectBtn.onclick = async ()=>{
+      setBusy(true);
+      try{
+        await submitHilApprovalDecision(payload.request_id, false, reasonInput.value || 'rejected_by_user');
+        closeHilApproval(payload.request_id);
+      }catch(e){
+        console.error('submit HIL reject failed', e);
+        setBusy(false);
+      }
+    };
+
+    approveBtn.onclick = async ()=>{
+      setBusy(true);
+      try{
+        await submitHilApprovalDecision(payload.request_id, true, reasonInput.value || 'approved_by_user');
+        closeHilApproval(payload.request_id);
+      }catch(e){
+        console.error('submit HIL approve failed', e);
+        setBusy(false);
+      }
+    };
+
+    actionRow.appendChild(rejectBtn);
+    actionRow.appendChild(approveBtn);
+
+    shell.appendChild(badge);
+    shell.appendChild(title);
+    shell.appendChild(summary);
+    shell.appendChild(requestMeta);
+    shell.appendChild(reasonInput);
+    shell.appendChild(actionRow);
+    overlay.appendChild(shell);
+    host.appendChild(overlay);
+    updateHilApprovalPosition();
+  }
+
+  function enqueueHilApproval(payload){
+    if (!payload || !payload.request_id) return;
+    if (activeHilApproval && activeHilApproval.request_id === payload.request_id) return;
+    if (hilApprovalQueue.some((item)=>item && item.request_id === payload.request_id)) return;
+    hilApprovalQueue.push(payload);
+    renderNextHilApproval();
+  }
+
   // 创建 PIXI 应用
   const app = new PIXI.Application({
     backgroundAlpha: 0,
@@ -196,7 +369,6 @@
   // scale control: baseScale is determined from renderer/window; scaleFactor from slider
   let baseScale = 1;
   let scaleFactor = parseFloat(modelScaleSlider ? modelScaleSlider.value : 1.0) || 1.0;
-  let _savedModelState = null;
   let runtimeLive2DConfig = null;
   let lastPersistedModelPosition = null;
 
@@ -229,7 +401,6 @@
     const parsed = Number(nextScale);
     scaleFactor = Math.max(0.1, Math.min(2.0, Number.isFinite(parsed) ? parsed : scaleFactor));
     applyModelScale();
-    try{ saveModelState(); }catch(e){}
   }
 
   async function persistModelPositionToBackend(force = false){
@@ -333,7 +504,7 @@
       const maxLeft = window.innerWidth - estimatedWidth * 0.5 - 8;
       const minTop = estimatedHeight * 0.5 + 8;
       const maxTop = window.innerHeight - estimatedHeight * 0.5 - 8;
-      const anchoredLeft = Math.max(minLeft, Math.min(maxLeft, left - 12));
+      const anchoredLeft = Math.max(minLeft, Math.min(maxLeft, left + quickControllerXOffset));
       const anchoredTop = Math.max(minTop, Math.min(maxTop, top + height * 0.45));
       quickController.style.left = Math.round(anchoredLeft) + 'px';
       quickController.style.top = Math.round(anchoredTop) + 'px';
@@ -441,55 +612,6 @@
     }
   }
 
-  function loadSavedModelState(){
-    loadModelState();
-    if (!currentModel || !_savedModelState) return;
-    try{
-      const st = _savedModelState;
-      const modelPath = (modelPathInput && modelPathInput.value) ? modelPathInput.value.trim() : defaultModel;
-      if (st.modelPath && st.modelPath === modelPath){
-        if (typeof st.x === 'number') currentModel.x = st.x;
-        else console.warn('Saved model state missing x coordinate');
-        if (typeof st.y === 'number') currentModel.y = st.y;
-        else console.warn('Saved model state missing y coordinate');
-        if (typeof st.scaleFactor === 'number'){
-          scaleFactor = st.scaleFactor;
-          if (modelScaleSlider){
-            modelScaleSlider.value = String(scaleFactor);
-            modelScaleValue.textContent = scaleFactor.toFixed(2);
-          }
-          applyModelScale();
-        }
-      }
-    }catch(e){
-      console.warn('apply saved model state err', e);
-    }
-  }
-
-  // Save current model state (path/x/y/scaleFactor) via electron API
-  function saveModelState(){
-    if (!window.api || !window.api.saveModelState) return;
-    try{
-      const modelPath = (modelPathInput && modelPathInput.value) ? modelPathInput.value.trim() : defaultModel;
-      const st = {
-        modelPath: modelPath,
-        x: currentModel ? currentModel.x : null,
-        y: currentModel ? currentModel.y : null,
-        scaleFactor: scaleFactor
-      };
-      window.api.saveModelState(st).then(res=>{ if (!res || !res.ok) console.warn('saveModelState failed', res); }).catch(e=>console.warn('saveModelState err', e));
-    }catch(e){/*ignore*/}
-  }
-
-  async function loadModelState(){
-    if (!window.api || !window.api.loadModelState) return null;
-    try{
-      const st = await window.api.loadModelState();
-      _savedModelState = st;
-      return st;
-    }catch(e){ console.warn('loadModelState err', e); return null; }
-  }
-
   // --- ASR / mic recognition state ---
   let micStream = null;
   let micAudioCtx = null;
@@ -533,8 +655,6 @@
   let silenceFrameLimit = 22;
   let minSpeechFrameLimit = 8;
   const VAD_END_DEBOUNCE_MS = 300;
-  loadSavedModelState();
-
   function getVadWsUrl(){
     const path = String((speechRuntimeConfig && speechRuntimeConfig.vad_ws_path) || DEFAULT_VAD_WS_PATH).trim() || DEFAULT_VAD_WS_PATH;
     return `ws://${BACKEND_HOST}:${BACKEND_PORT}${path.startsWith('/') ? path : `/${path}`}`;
@@ -831,28 +951,20 @@
         if (!arg) return;
         let payload = null;
         try{ payload = JSON.parse(arg); }catch(e){ console.warn('Invalid NIMBLE_CLOSE payload', e, arg); return; }
-        if (payload && payload.callback_id) closeNimbleWindow(payload.callback_id, false);
+        if (payload && payload.callback_id) {
+          closeNimbleWindow(payload.callback_id, false);
+          closeHilApproval(payload.callback_id);
+        }
       } else if (cmd === 'HIL_APPROVAL'){
         if (!arg) return;
         let payload = null;
         try{ payload = JSON.parse(arg); }catch(e){ console.warn('Invalid HIL_APPROVAL payload', e, arg); return; }
-        const title = String(payload?.request || '需要人工确认').trim();
-        const summary = String(payload?.summary || '').trim();
-        const approvalText = summary ? `${title}\n\n${summary}` : title;
-        const approved = window.confirm(approvalText);
-        try{
-          const r = await fetch(HIL_FEEDBACK_ENDPOINT, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ feedback: !!approved, id: payload?.ID || null })
-          });
-          const j = await r.json().catch(()=>({}));
-          if (!r.ok || j.error){
-            console.warn('HIL feedback failed', r.status, j);
-          }
-        }catch(e){
-          console.error('HIL feedback network error', e);
-        }
+        enqueueHilApproval({
+          request_id: String(payload?.request_id || payload?.ID || '').trim(),
+          title: String(payload?.title || payload?.request || '需要人工确认').trim(),
+          summary: String(payload?.summary || '').trim(),
+          severity: String(payload?.severity || 'warning').trim().toLowerCase(),
+        });
       } else if (cmd=="SET_MOTION"){
         if (!arg) return;
         playMotionByName(arg);
@@ -868,6 +980,11 @@
         if (!Number.isFinite(next)) return;
         textChatBarYFactor = Math.max(0, Math.min(1, next));
         updateTextChatBarPosition();
+      } else if (cmd === 'SET_QUICK_CONTROLLER_X_OFFSET'){
+        const next = Number(arg);
+        if (!Number.isFinite(next)) return;
+        quickControllerXOffset = Math.max(-400, Math.min(400, next));
+        updateQuickControllerPosition();
       } else if (cmd === 'SET_MODEL_POSITION'){
         if (!currentModel || !arg) return;
         const [xRaw, yRaw] = arg.split(/\s+/);
@@ -876,7 +993,6 @@
         if (Number.isFinite(x)) currentModel.x = x;
         if (Number.isFinite(y)) currentModel.y = y;
         updateQuickControllerPosition();
-        saveModelState();
         persistModelPositionToBackend(true);
       } else if (cmd === 'START_ASR'){
         startRecording();
@@ -1234,6 +1350,7 @@
       asrBubbleEl.style.left = Math.round(asrBubbleCurrentX) + 'px';
       asrBubbleEl.style.top = Math.round(asrBubbleCurrentY) + 'px';
       asrTextEl.style.fontSize = '20px';
+      updateHilApprovalPosition();
     }catch(e){/*ignore*/}
   }
 
@@ -1531,10 +1648,7 @@
         model.cursor = 'grab';
         setInteractionLock(false);
         persistModelPositionToBackend();
-        saveModelState();
       });
-      // save state after dragging ends
-      model.on('pointerup', () => { saveModelState(); });
       model.on('pointermove', (e) => {
         if (!dragging) return;
         const pos = e.data.global;
@@ -1556,6 +1670,14 @@
       clearOverlay();
       // 自动缩放示例：根据窗口尺寸调整基础缩放
       baseScale = Math.min(app.renderer.width / 1600, app.renderer.height / 900);
+      const configuredX = runtimeLive2DConfig && runtimeLive2DConfig.LIVE2D_MODEL_X !== undefined && runtimeLive2DConfig.LIVE2D_MODEL_X !== null && runtimeLive2DConfig.LIVE2D_MODEL_X !== ''
+        ? Number(runtimeLive2DConfig.LIVE2D_MODEL_X)
+        : null;
+      const configuredY = runtimeLive2DConfig && runtimeLive2DConfig.LIVE2D_MODEL_Y !== undefined && runtimeLive2DConfig.LIVE2D_MODEL_Y !== null && runtimeLive2DConfig.LIVE2D_MODEL_Y !== ''
+        ? Number(runtimeLive2DConfig.LIVE2D_MODEL_Y)
+        : null;
+      if (Number.isFinite(configuredX)) model.x = configuredX;
+      if (Number.isFinite(configuredY)) model.y = configuredY;
       // apply user-selected scale factor
       applyModelScale();
       // keep reference for mouth sync
@@ -1564,7 +1686,9 @@
       updateTextChatBarPosition();
       refreshQuickControllerVisibility();
       if (modelPathInput) modelPathInput.value = path;
-      saveModelState();
+      if (Number.isFinite(configuredX) && Number.isFinite(configuredY)) {
+        lastPersistedModelPosition = { x: Math.round(configuredX), y: Math.round(configuredY) };
+      }
     }).catch(err => {
       if (String(err && err.message || '') === 'stale model load request') return;
       showOverlay('加载模型失败：' + err);
@@ -1582,16 +1706,14 @@
     currentModel.x = app.renderer.width - 200;
     currentModel.y = app.renderer.height - 10;
     updateQuickControllerPosition();
-    saveModelState();
     persistModelPositionToBackend();
   });
 
-  // 自动尝试加载默认或保存的模型路径/状态
+  // 自动尝试加载后端配置指定的模型与布局
   modelPathInput.value = defaultModel;
   (async ()=>{
     await refreshSpeechRuntimeConfig(true);
     const runtimeCfg = await loadRuntimeLive2DConfig();
-    const st = await loadModelState();
     const configuredModel = runtimeCfg && runtimeCfg.LIVE2D_MODEL_PATH ? String(runtimeCfg.LIVE2D_MODEL_PATH).trim() : '';
     const configuredScale = runtimeCfg && runtimeCfg.LIVE2D_MODEL_SCALE !== undefined && runtimeCfg.LIVE2D_MODEL_SCALE !== null && runtimeCfg.LIVE2D_MODEL_SCALE !== ''
       ? Number(runtimeCfg.LIVE2D_MODEL_SCALE)
@@ -1599,19 +1721,21 @@
     const configuredTextChatYFactor = runtimeCfg && runtimeCfg.TEXT_CHAT_BAR_Y_FACTOR !== undefined && runtimeCfg.TEXT_CHAT_BAR_Y_FACTOR !== null && runtimeCfg.TEXT_CHAT_BAR_Y_FACTOR !== ''
       ? Number(runtimeCfg.TEXT_CHAT_BAR_Y_FACTOR)
       : null;
+    const configuredQuickControllerXOffset = runtimeCfg && runtimeCfg.FRONTEND_QUICK_CONTROLLER_X_OFFSET !== undefined && runtimeCfg.FRONTEND_QUICK_CONTROLLER_X_OFFSET !== null && runtimeCfg.FRONTEND_QUICK_CONTROLLER_X_OFFSET !== ''
+      ? Number(runtimeCfg.FRONTEND_QUICK_CONTROLLER_X_OFFSET)
+      : null;
     if (Number.isFinite(configuredScale) && configuredScale > 0) {
       scaleFactor = configuredScale;
-      if (modelScaleSlider) modelScaleSlider.value = String(scaleFactor);
-      if (modelScaleValue) modelScaleValue.textContent = scaleFactor.toFixed(2) + 'x';
-    } else if (st && typeof st.scaleFactor === 'number') {
-      scaleFactor = st.scaleFactor;
       if (modelScaleSlider) modelScaleSlider.value = String(scaleFactor);
       if (modelScaleValue) modelScaleValue.textContent = scaleFactor.toFixed(2) + 'x';
     }
     if (Number.isFinite(configuredTextChatYFactor)) {
       textChatBarYFactor = Math.max(0, Math.min(1, configuredTextChatYFactor));
     }
-    const toLoad = configuredModel || ((st && st.modelPath) ? st.modelPath : defaultModel);
+    if (Number.isFinite(configuredQuickControllerXOffset)) {
+      quickControllerXOffset = Math.max(-400, Math.min(400, configuredQuickControllerXOffset));
+    }
+    const toLoad = configuredModel || defaultModel;
     modelPathInput.value = toLoad;
     // small delay so UI visible
     setTimeout(()=>{ loadModel(toLoad); }, 120);
@@ -1626,6 +1750,7 @@
     try{
       baseScale = Math.min(app.renderer.width / 1600, app.renderer.height / 900);
       applyModelScale();
+      updateHilApprovalPosition();
     }catch(e){}
   });
 
@@ -1662,7 +1787,8 @@
         hoverQuickController = isPointOverQuickController(e.clientX, e.clientY);
         hoverModel = isPointerOnModel(e.clientX, e.clientY);
         const overAsrBubble = isPointOverAsrBubble(e.clientX, e.clientY);
-        const overInteractive = hoverQuickController || hoverModel || overAsrBubble || dragging || interactionLocked;
+        const overHilApproval = isPointOverHilApproval(e.clientX, e.clientY);
+        const overInteractive = hoverQuickController || hoverModel || overAsrBubble || overHilApproval || dragging || interactionLocked;
         if (overInteractive){
           if (!interactiveActive){
             interactiveActive = true;
@@ -1946,11 +2072,6 @@
       synthesizeAndPlay(text, lang);
     });
   }
-  // save model state on unload
-  window.addEventListener('beforeunload', ()=>{
-    try{ saveModelState(); }catch(e){}
-  });
-
   if (quickToggleAsrBtn) quickToggleAsrBtn.addEventListener('click', ()=>{
     toggleAsr();
   });

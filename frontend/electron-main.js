@@ -506,31 +506,6 @@ app.whenReady().then(()=>{
   app.on('activate', ()=>{ if (BrowserWindow.getAllWindows().length === 0) createWindow(); })
 });
 
-// model state file location in userData
-const MODEL_STATE_FILE = path.join(app.getPath('userData'), 'faust_model_state.json');
-
-ipcMain.handle('model-state-save', async (evt, state) => {
-  try{
-    await fs.promises.writeFile(MODEL_STATE_FILE, JSON.stringify(state, null, 2), 'utf8');
-    return { ok: true };
-  }catch(e){
-    console.error('保存 model state 失败', e);
-    return { ok: false, error: String(e) };
-  }
-});
-
-ipcMain.handle('model-state-load', async () => {
-  try{
-    if (!fs.existsSync(MODEL_STATE_FILE)) return null;
-    const raw = await fs.promises.readFile(MODEL_STATE_FILE, 'utf8');
-    console.log('Loaded model state:', raw);
-    return JSON.parse(raw);
-  }catch(e){
-    console.error('读取 model state 失败', e);
-    return null;
-  }
-});
-
 ipcMain.handle('set-ignore-mouse-events', (evt, ignore) => {
   if (!mainWindow) return false;
   try{

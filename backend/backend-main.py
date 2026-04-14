@@ -1151,9 +1151,16 @@ async def command_websocket(websocket: WebSocket):
                 print("[main] Forwarding command from queue:",command)
                 await websocket.send_text(f"{command}")
             await asyncio.sleep(0.05)
+    except WebSocketDisconnect:
+        print("[main] command websocket disconnected")
     except Exception as e:
-        print("Websocket error:", e)
-        await websocket.send_text(f"SAY COMMAND LOOP ERROR::{e}")
+        print("[main] command websocket error:", e)
+        try:
+            await websocket.send_text(f"SAY COMMAND LOOP ERROR::{e}")
+        except WebSocketDisconnect:
+            print("[main] command websocket disconnected while reporting error")
+        except RuntimeError as send_error:
+            print("[main] command websocket closed before error report:", send_error)
 @app.post("/faust/command/forward")
 async def command_forward_post(payload: dict):
     """Forwards a command from frontend to the agent and returns the reply."""
@@ -1169,16 +1176,31 @@ async def command_forward_post(payload: dict):
 async def human_in_loop_feedback_post(payload: dict):
     """Handles feedback from the human-in-the-loop system."""
     feedback = None
+    request_id = None
+    reason = None
     print(payload)
     if isinstance(payload, dict):
         feedback = payload.get('feedback')
-    if not feedback:
+        request_id = payload.get('request_id') or payload.get('id')
+        reason = payload.get('reason')
+    if feedback is None:
         return {"error": "no feedback provided"}
-    if feedback == True:
-        events.HIL_feedback_event.set()
+    approved = bool(feedback)
+    resolved = False
+    if request_id:
+        resolved = events.resolve_hil_request(str(request_id), {
+            "approved": approved,
+            "reason": reason or ("approved" if approved else "rejected"),
+            "request_id": str(request_id),
+        })
+        backend2frontend.FrontEndCloseNimbleWindow({"callback_id": str(request_id), "reason": "approved" if approved else "rejected"})
     else:
-        events.HIL_feedback_fail_event.set()
-    return {"status": "feedback received"}
+        if approved:
+            events.HIL_feedback_event.set()
+        else:
+            events.HIL_feedback_fail_event.set()
+        resolved = True
+    return {"status": "feedback received", "request_id": request_id, "resolved": resolved}
 
 @app.post("/faust/nimble/callback")
 async def nimble_callback_post(payload: dict):

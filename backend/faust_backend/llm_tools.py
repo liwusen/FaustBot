@@ -320,28 +320,54 @@ async def _rag_query_async_job(callback_id: str, query: str, mode: str, only_nee
         "recall_description": f"RAG 异步查询已完成。请使用 ragQueryAsyncGetTool 获取结果，callback_id={callback_id}",
         "lifespan": 600,
     })
-async def HILRequest(id,title,summary):
+async def HILRequest(id, title, summary, timeout_seconds: int = 120, severity: str = "warning"):
     if not STARTED:
-        return False,"cannot call HILRequest before the system is fully started."
-    backend2frontend.FrontendHIL({"ID": id,"request": title,"summary": summary})
-    events.HIL_feedback_event.clear()
-    events.HIL_feedback_fail_event.clear()
-    ok_callback=asyncio.create_task(events.HIL_feedback_event.wait())
-    fail_callback=asyncio.create_task(events.HIL_feedback_fail_event.wait())
-    timeout_callback=asyncio.create_task(asyncio.sleep(30)) # 30 seconds timeout
-    done,_=await asyncio.wait([ok_callback,fail_callback,timeout_callback],return_when=asyncio.FIRST_COMPLETED)
-    if ok_callback in done:
-        events.HIL_feedback_event.clear()
-        events.HIL_feedback_fail_event.clear()
-        return True,"approved"
-    elif fail_callback in done:
-        events.HIL_feedback_fail_event.clear()
-        events.HIL_feedback_event.clear()
-        return False,"rejected"
-    elif timeout_callback in done:
-        return False,"timeout"
-    else:
-        return False,"unknown"
+        return False, "cannot call HILRequest before the system is fully started."
+    request_id = str(id or f"hil_{uuid.uuid4().hex}")
+    future = events.create_hil_request(request_id)
+    backend2frontend.FrontendHIL({
+        "request_id": request_id,
+        "title": str(title or "需要人工确认"),
+        "summary": str(summary or ""),
+        "severity": str(severity or "warning"),
+        "timeout_seconds": int(max(5, timeout_seconds)),
+    })
+    try:
+        result = await asyncio.wait_for(future, timeout=max(5, int(timeout_seconds)))
+    except asyncio.TimeoutError:
+        events.cancel_hil_request(request_id, "timeout")
+        backend2frontend.FrontEndCloseNimbleWindow({"callback_id": request_id, "reason": "timeout"})
+        return False, "timeout"
+
+    approved = bool((result or {}).get("approved"))
+    reason = str((result or {}).get("reason") or ("approved" if approved else "rejected"))
+    return approved, reason
+
+
+@add_to_tool_list
+@tool
+@record_func_name
+async def requestHumanApprovalTool(title: str, summary: str, timeout_seconds: int = 120, severity: str = "warning") -> str:
+    """
+    Description:
+        请求用户在前端审批窗口中批准或拒绝一项操作。
+        当操作具有风险、不可逆、会安装外部资源、修改关键文件或涉及高权限行为时，应优先使用此工具。
+    Args:
+        title (str): 审批窗口标题，直接说明要批准什么。
+        summary (str): 详细说明本次操作内容、风险、影响范围。
+        timeout_seconds (int): 等待用户审批的超时时间，默认 120 秒。
+        severity (str): 风险级别，可选 info、warning、danger。
+    Returns:
+        str: JSON 字符串，包含 approved、reason、title。
+    """
+    approved, reason = await HILRequest(
+        id=f"hil_tool_{uuid.uuid4().hex}",
+        title=title,
+        summary=summary,
+        timeout_seconds=timeout_seconds,
+        severity=severity,
+    )
+    return json.dumps({"approved": bool(approved), "reason": reason, "title": title}, ensure_ascii=False)
     
 @add_to_tool_list#记录最终TOOL
 @tool#把函数注册为工具，供LLM调用

@@ -221,7 +221,7 @@ async def security_check_command(command:str)->bool:
         return False
     elif accept == "human_approval_needed":
         res,_=await HILRequest("安全检查", f"命令: {command} 需要人工审批",f"{command}\nReason: {reason}\nNeeds human approval")
-        if res=="approved":
+        if res:
             return True
         else:
             return False

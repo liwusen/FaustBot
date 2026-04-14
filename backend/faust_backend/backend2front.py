@@ -47,6 +47,10 @@ def FrontEndSetTextChatYFactor(value: float | int) -> None:
     _push_command("SET_TEXT_CHAT_Y_FACTOR", str(value))
 
 
+def FrontEndSetQuickControllerXOffset(value: float | int) -> None:
+    _push_command("SET_QUICK_CONTROLLER_X_OFFSET", str(value))
+
+
 def FrontEndShowNimbleWindow(payload: dict):
     """Send a nimble window payload to the frontend.
 
@@ -79,8 +83,8 @@ def FrontendHIL(context:dict)->None:
     Args:
         text (str): The approval request text.
         Example text:
-        {"ID": "<uuid>", 
-        "request": "Do you approve the action to delete all files?",
+        {"request_id": "<uuid>", 
+        "title": "Do you approve the action to delete all files?",
         "summary": "sudo rm -rf / --no-preserve-root"}
     """
     _push_command("HIL_APPROVAL", context)
