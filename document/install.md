@@ -6,7 +6,7 @@
 
 进入 [liwusen/FaustBot-llm-vtuber: FaustBot LLM Vtuber/桌宠](https://github.com/liwusen/FaustBot-llm-vtuber)
 
-![description](.\assets\download_zip.png)
+![description](assets/download_zip.png)
 
 点击 Download Zip,将下载后的Zip解压到一个文件夹中备用
 
@@ -29,7 +29,7 @@ node -v
 
 按下Enter,出现
 
-![nodejs版本为v24......](D:\dev\faustbot\faust\document\assets\nodejs_version.png)
+![nodejs版本为v24......](assets\nodejs_version.png)
 
 即代表安装成功
 
