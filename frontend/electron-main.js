@@ -378,11 +378,16 @@ function spawnDetachedWithCheck(cmd, args, options = {}) {
 async function launchPySideConfiger(){
   const scriptPath = path.join(__dirname, 'configer_pyside6.py');
   const startBatPath = path.join(__dirname, 'start-configer.bat');
+  const runtimePythonPath = path.join(__dirname, '..', '.runtime', 'python.exe');
+  const bootstrapPath = path.join(__dirname, '..', 'embedded_python_bootstrap.py');
   if (!fs.existsSync(scriptPath)) {
     return { ok: false, error: `Configer 脚本不存在: ${scriptPath}` };
   }
 
   const candidates = [];
+  if (fs.existsSync(runtimePythonPath)) {
+    candidates.push({ cmd: runtimePythonPath, args: [bootstrapPath, scriptPath] });
+  }
   if (fs.existsSync(startBatPath)) {
     candidates.push({
       cmd: 'cmd.exe',

@@ -1,2 +1,5 @@
+@echo off
 cd /d "%~dp0"
-conda activate my-neuro && python live2d_downloader.py
+call "%~dp0..\use-runtime.bat" || exit /b 1
+echo Using root runtime: %FAUST_PYTHON%
+"%FAUST_PYTHON%" "%~dp0..\embedded_python_bootstrap.py" "%~dp0live2d_downloader.py"

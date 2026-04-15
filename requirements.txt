@@ -12,6 +12,7 @@ datasets
 peft
 py7zr
 rich
+websocket-client
 
 #屏幕点击工具依赖
 openai
@@ -25,13 +26,12 @@ watchdog
 #Frontend UI Required
 PySide6
 requests
-pyinstaller
 
 # rag nano api Required
 nano-vectordb
 
 #Langchain
-langchain==1.2.7
+langchain>1
 langchain-openai
 langchain-deepseek==1.0.1
 langchain-community==0.4.1
