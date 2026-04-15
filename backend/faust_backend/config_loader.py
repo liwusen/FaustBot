@@ -39,6 +39,7 @@ def load_configs():
     global OPENAI_ASR_BASE_URL, OPENAI_ASR_MODEL, OPENAI_ASR_LANGUAGE, OPENAI_ASR_PROMPT, OPENAI_ASR_RESPONSE_FORMAT, OPENAI_ASR_TEMPERATURE, OPENAI_ASR_TIMESTAMP_GRANULARITIES
     global OPENAI_ASR_ENERGY_THRESHOLD, OPENAI_ASR_SILENCE_MS, OPENAI_ASR_MIN_SPEECH_MS, OPENAI_ASR_PREROLL_MS
     global OPENAI_TTS_API_KEY, OPENAI_ASR_API_KEY
+    global TTS_REFER_WAV_PATH, TTS_PROMPT_TEXT, TTS_PROMPT_LANGUAGE
     _ensure_private_config_exists()
     with open(CONFIG_FILE_P_PATH, 'r', encoding='utf-8') as f:
         private_config = json.load(f)
@@ -94,9 +95,9 @@ def load_configs():
     OPENAI_ASR_PREROLL_MS = int(config.get('OPENAI_ASR_PREROLL_MS', 250) or 250)
     
     # TTS 参考音频配置
-    TTS_REFER_WAV_PATH = config.get('TTS_REFER_WAV_PATH', '')
-    TTS_PROMPT_TEXT = config.get('TTS_PROMPT_TEXT', '')
-    TTS_PROMPT_LANGUAGE = config.get('TTS_PROMPT_LANGUAGE', 'zh')
+    TTS_REFER_WAV_PATH = config.get('TTS_REFER_WAV_PATH', p_join(CONFIG_ROOT, 'voices', 'neuro.wav'))
+    TTS_PROMPT_TEXT = config.get('TTS_PROMPT_TEXT', 'Hold on please, I\'m busy. Okay, I think I heard him say he wants me to stream Hollow Knight on Tuesday and Thursday.')
+    TTS_PROMPT_LANGUAGE = config.get('TTS_PROMPT_LANGUAGE', 'en')
     
     AGENT_ROOT=p_join(CONFIG_ROOT, "agents", AGENT_NAME)
     return config, private_config

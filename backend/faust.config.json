@@ -40,7 +40,7 @@
     "OPENAI_ASR_RESPONSE_FORMAT": "json",
     "OPENAI_ASR_TEMPERATURE": 0.0,
     "OPENAI_ASR_TIMESTAMP_GRANULARITIES": "",
-    "TTS_REFER_WAV_PATH": "D:/my-neuro/my-neuro-main/faust/backend/tts-hub/GPT-SoVITS-Bundle/role_voice_api/neuro/01.wav",
+    "TTS_REFER_WAV_PATH": "voices/neuro.wav",
     "TTS_PROMPT_TEXT": "Hold on please, I'm busy. Okay, I think I heard him say he wants me to stream Hollow Knight on Tuesday and Thursday.",
     "TTS_PROMPT_LANGUAGE": "en",
     "TEMP_DIR": "temp"

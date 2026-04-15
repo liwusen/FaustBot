@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -59,12 +60,45 @@ def frontend_speech_config() -> dict[str, Any]:
     }
 
 
+def _resolve_local_tts_reference() -> tuple[str, str, str]:
+    refer_path = str(getattr(conf, "TTS_REFER_WAV_PATH", "") or "").strip()
+    prompt_text = str(getattr(conf, "TTS_PROMPT_TEXT", "") or "").strip()
+    prompt_language = str(getattr(conf, "TTS_PROMPT_LANGUAGE", "zh") or "zh").strip()
+    if not refer_path:
+        raise SpeechRuntimeError("未配置本地 TTS 参考音频路径")
+
+    normalized_path = Path(refer_path).expanduser()
+    if not normalized_path.is_absolute():
+        normalized_path = Path(getattr(conf, "CONFIG_ROOT", ".")) / normalized_path
+    if not normalized_path.exists():
+        raise SpeechRuntimeError(f"本地 TTS 参考音频不存在: {normalized_path}")
+    if not prompt_text:
+        raise SpeechRuntimeError("未配置本地 TTS 参考音频文本")
+    return str(normalized_path), prompt_text, prompt_language
+
+
+def _prime_local_tts_reference() -> None:
+    refer_wav_path, prompt_text, prompt_language = _resolve_local_tts_reference()
+    resp = requests.post(
+        "http://127.0.0.1:5000/change_refer",
+        json={
+            "refer_wav_path": refer_wav_path,
+            "prompt_text": prompt_text,
+            "prompt_language": prompt_language,
+        },
+        timeout=30,
+    )
+    if not resp.ok:
+        raise SpeechRuntimeError(f"本地 TTS 参考音频设置失败: {resp.status_code} {resp.text}")
+
+
 def synthesize_tts(text: str, lang: str | None = None) -> tuple[bytes, str]:
     payload_text = str(text or "").strip()
     if not payload_text:
         raise SpeechRuntimeError("TTS 文本不能为空")
 
     if should_start_local_tts():
+        _prime_local_tts_reference()
         payload = {
             "text": payload_text,
             "text_language": str(lang or getattr(conf, "FRONTEND_DEFAULT_TTS_LANG", "zh") or "zh"),

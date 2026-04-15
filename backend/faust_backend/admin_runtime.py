@@ -70,9 +70,9 @@ PUBLIC_CONFIG_DEFAULTS = {
     "OPENAI_ASR_TEMPERATURE": 0.0,
     "OPENAI_ASR_TIMESTAMP_GRANULARITIES": "",
     # TTS 参考音频配置
-    "TTS_REFER_WAV_PATH": "",
-    "TTS_PROMPT_TEXT": "",
-    "TTS_PROMPT_LANGUAGE": "zh",
+    "TTS_REFER_WAV_PATH": str(BACKEND_ROOT / "voices" / "neuro.wav"),
+    "TTS_PROMPT_TEXT": "Hold on please, I'm busy. Okay, I think I heard him say he wants me to stream Hollow Knight on Tuesday and Thursday.",
+    "TTS_PROMPT_LANGUAGE": "en",
 }
 PRIVATE_CONFIG_DEFAULTS = {
     "CHAT_API_KEY": "",
