@@ -28,7 +28,13 @@ set "INSTALL_NODE=0"
 set "INSTALL_TTS=0"
 set "TORCH_VARIANT=cpu"
 set "TTS_VARIANT=standard"
-
+echo -----------------------------------------
+echo FaustBot 安装程序
+echo 这个脚本将引导你安装运行环境，包括 Python、PyTorch、Python 依赖、Node.js 依赖和 TTS 模型。
+echo 你可以根据需要选择安装哪些组件。
+echo -----------------------------------------
+echo 如果你同意本项目的许可证协议(MIT),及其依赖的协议,请按任意键继续。
+pause
 call :collect_choices
 
 if "%INSTALL_PYTHON%"=="1" (
