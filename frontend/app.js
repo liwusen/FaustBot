@@ -57,6 +57,7 @@
   let asrBubbleTargetY = 0;
   let asrBubbleInitialized = false;
   let asrBubbleSource = 'ai';
+  let asrBubbleState = { source: 'ai', entries: [] };
   let asrTextPinnedToBottom = true;
   let currentLipSyncParamIds = ['ParamMouthOpenY'];
   let activeModelLoadRequestId = 0;
@@ -1173,7 +1174,63 @@
       resetStreamTtsState();
       currentChatRequest.replyText = '';
       currentChatRequest.pendingBuffer = '';
+      currentChatRequest.entries = [];
       if (chatStatusEl) chatStatusEl.textContent = '聊天流式响应中...';
+      return;
+    }
+
+    if (msg.type === 'tool_start'){
+      if (!currentChatRequest.entries) currentChatRequest.entries = [];
+      currentChatRequest.entries.push({
+        type: 'tool',
+        callId: String(msg.call_id || ''),
+        toolName: String(msg.tool_name || '未知工具'),
+        args: msg.args || {},
+        output: '',
+        done: false,
+        expanded: false,
+      });
+      showResultBubble('ai', currentChatRequest.entries);
+      return;
+    }
+
+    if (msg.type === 'tool_result'){
+      if (!currentChatRequest.entries) currentChatRequest.entries = [];
+      const callId = String(msg.call_id || '');
+      let target = null;
+      if (callId) {
+        for (let i = currentChatRequest.entries.length - 1; i >= 0; i -= 1){
+          const item = currentChatRequest.entries[i];
+          if (item && item.type === 'tool' && String(item.callId || '') === callId) {
+            target = item;
+            break;
+          }
+        }
+      }
+      if (!target) {
+        for (let i = currentChatRequest.entries.length - 1; i >= 0; i -= 1){
+          const item = currentChatRequest.entries[i];
+          if (item && item.type === 'tool' && String(item.toolName || '') === String(msg.tool_name || '') && !item.done) {
+            target = item;
+            break;
+          }
+        }
+      }
+      if (!target) {
+        target = {
+          type: 'tool',
+          callId,
+          toolName: String(msg.tool_name || '未知工具'),
+          args: {},
+          output: '',
+          done: false,
+          expanded: false,
+        };
+        currentChatRequest.entries.push(target);
+      }
+      target.output = String(msg.output || '');
+      target.done = true;
+      showResultBubble('ai', currentChatRequest.entries);
       return;
     }
 
@@ -1181,7 +1238,14 @@
       const chunk = normalizeTtsText(msg.content || '');
       currentChatRequest.replyText += chunk;
       currentChatRequest.pendingBuffer += chunk;
-      showResultBubble('ai', currentChatRequest.replyText);
+      if (!currentChatRequest.entries) currentChatRequest.entries = [];
+      const lastEntry = currentChatRequest.entries[currentChatRequest.entries.length - 1];
+      if (lastEntry && lastEntry.type === 'text') {
+        lastEntry.text = String(lastEntry.text || '') + chunk;
+      } else {
+        currentChatRequest.entries.push({ type: 'text', text: chunk });
+      }
+      showResultBubble('ai', currentChatRequest.entries);
       const split = extractCompletedSentences(currentChatRequest.pendingBuffer);
       currentChatRequest.pendingBuffer = split.rest;
       console.log("收到增量回复，当前累计文本：", currentChatRequest.replyText);
@@ -1203,6 +1267,7 @@
       currentChatRequest.pendingBuffer = '';
       if (chatStatusEl) chatStatusEl.textContent = '聊天完成';
       if (textChatStatus) textChatStatus.textContent = '文字已发送';
+      showResultBubble('ai', currentChatRequest.entries);
       currentChatRequest = null;
       request.resolve(reply);
       if (request.resumeAfter){
@@ -1279,6 +1344,103 @@
     return `AI:${raw}`;
   }
 
+  function formatToolBubbleValue(value){
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'string') return value;
+    try{
+      return JSON.stringify(value, null, 2);
+    }catch(e){
+      return String(value);
+    }
+  }
+
+  function escapeHtml(text){
+    return String(text || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function renderResultBubbleHtml(source, entries){
+    const blocks = [];
+    const items = Array.isArray(entries) ? entries : [];
+    for (const item of items){
+      if (!item || typeof item !== 'object') continue;
+      if (item.type === 'text') {
+        const formatted = formatResultBubbleText(source, item.text || '');
+        if (formatted) {
+          blocks.push(`<div class="result-bubble-main">${escapeHtml(formatted)}</div>`);
+        }
+        continue;
+      }
+      if (item.type !== 'tool') continue;
+      const toolName = escapeHtml(item.toolName ? item.toolName : '未知工具');
+      const argsText = escapeHtml(formatToolBubbleValue(Object.prototype.hasOwnProperty.call(item, 'args') ? item.args : {}));
+      const outputText = escapeHtml(formatToolBubbleValue(item.output ? item.output : ''));
+      const expandedAttr = item.expanded ? ' open' : '';
+      const stateText = item.done ? '已完成' : '调用中';
+      const callIdAttr = escapeHtml(item.callId || `${toolName}-${blocks.length}`);
+      blocks.push(
+        `<section class="tool-call-card${item.done ? ' is-done' : ' is-running'}">` +
+          `<div class="tool-call-divider" aria-hidden="true"></div>` +
+          `<details class="tool-call-details" data-call-id="${callIdAttr}"${expandedAttr}>` +
+            `<summary class="tool-call-summary">` +
+              `<span class="tool-call-title">调用工具:${toolName}</span>` +
+              `<span class="tool-call-status">${stateText}</span>` +
+            `</summary>` +
+            `<div class="tool-call-body">` +
+              `<div class="tool-call-section-label">参数</div>` +
+              `<pre class="tool-call-pre">${argsText || '(空)'}</pre>` +
+              `<div class="tool-call-section-label">返回值</div>` +
+              `<pre class="tool-call-pre">${outputText || (item.done ? '(空)' : '等待返回...')}</pre>` +
+            `</div>` +
+          `</details>` +
+        `</section>`
+      );
+    }
+    return blocks.join('');
+  }
+
+  function cloneBubbleEntries(entries){
+    if (!Array.isArray(entries)) return [];
+    return entries.map((item)=>{
+      if (!item || typeof item !== 'object') return null;
+      if (item.type === 'text') {
+        return {
+          type: 'text',
+          text: String(item.text || ''),
+        };
+      }
+      if (item.type === 'tool') {
+        return {
+          type: 'tool',
+          callId: String(item.callId || ''),
+          toolName: String(item.toolName || '未知工具'),
+          args: Object.prototype.hasOwnProperty.call(item, 'args') ? item.args : {},
+          output: String(item.output || ''),
+          done: !!item.done,
+          expanded: !!item.expanded,
+        };
+      }
+      return null;
+    }).filter(Boolean);
+  }
+
+  function handleResultBubbleToggle(ev){
+    const details = ev.target;
+    if (!details || !details.classList || !details.classList.contains('tool-call-details')) return;
+    const callId = String(details.dataset.callId || '');
+    if (!callId || !Array.isArray(asrBubbleState.entries)) return;
+    for (const entry of asrBubbleState.entries){
+      if (entry && entry.type === 'tool' && String(entry.callId || '') === callId) {
+        entry.expanded = details.open;
+        break;
+      }
+    }
+  }
+
   function rememberAsrScrollIntent(){
     if (!asrTextEl) return;
     const threshold = 18;
@@ -1300,15 +1462,22 @@
     asrBubbleInitialized = false;
   }
 
-  function showResultBubble(source, text){
+  function showResultBubble(source, entries){
     if (!asrTextEl || !asrBubbleEl) return;
     asrBubbleSource = source || 'ai';
     asrBubbleEl.dataset.source = asrBubbleSource;
-    const formatted = formatResultBubbleText(asrBubbleSource, text);
+    const normalizedEntries = Array.isArray(entries)
+      ? entries
+      : (String(entries || '').trim() ? [{ type: 'text', text: String(entries || '') }] : []);
+    asrBubbleState = {
+      source: asrBubbleSource,
+      entries: cloneBubbleEntries(normalizedEntries),
+    };
+    const html = renderResultBubbleHtml(asrBubbleSource, asrBubbleState.entries);
     rememberAsrScrollIntent();
-    asrBubbleEl.style.display = formatted ? 'flex' : 'none';
-    asrTextEl.textContent = formatted;
-    if (formatted) {
+    asrBubbleEl.style.display = html ? 'flex' : 'none';
+    asrTextEl.innerHTML = html;
+    if (html) {
       updateAsrTextPosition(true);
       scrollAsrTextToBottom(true);
     }
@@ -2093,6 +2262,7 @@
     });
   }
   if (asrBubbleEl){
+    asrBubbleEl.addEventListener('toggle', handleResultBubbleToggle, true);
     asrTextEl.addEventListener('scroll', ()=>{ rememberAsrScrollIntent(); });
     asrBubbleEl.addEventListener('mouseenter', ()=>{
       if (clickThroughController) clickThroughController.forceInteractive();

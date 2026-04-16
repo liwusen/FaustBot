@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import shutil
 from pathlib import Path
 
@@ -31,6 +32,15 @@ def choose_download() -> tuple[str, str]:
     if is_nvidia50:
         return NVIDIA50_URL, "GPT-SoVITS-v2pro-20250604-nvidia50.7z"
     return STANDARD_URL, "GPT-SoVITS-v2pro-20250604.7z"
+
+
+def choose_download_by_variant(variant: str | None) -> tuple[str, str]:
+    normalized = str(variant or "").strip().lower()
+    if normalized == "nvidia50":
+        return NVIDIA50_URL, "GPT-SoVITS-v2pro-20250604-nvidia50.7z"
+    if normalized == "standard":
+        return STANDARD_URL, "GPT-SoVITS-v2pro-20250604.7z"
+    return choose_download()
 
 
 def download_with_progress(url: str, archive_path: Path) -> None:
@@ -76,8 +86,12 @@ def normalize_tts_layout() -> None:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="下载并解压本地 TTS 包")
+    parser.add_argument("--gpu-variant", choices=["nvidia50", "standard"], default=None)
+    args = parser.parse_args()
+
     try:
-        url, filename = choose_download()
+        url, filename = choose_download_by_variant(args.gpu_variant)
         archive_path = DOWNLOAD_DIR / filename
         print(f"下载地址: {url}")
         download_with_progress(url, archive_path)

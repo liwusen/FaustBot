@@ -275,6 +275,82 @@ def _is_ai_message_chunk(message_chunk) -> bool:
     return "aimessage" in cls_name
 
 
+def _tool_value_to_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False, indent=2)
+    except Exception:
+        return str(value)
+
+
+def _normalize_tool_args(payload) -> dict:
+    if isinstance(payload, dict):
+        return payload
+    if isinstance(payload, str):
+        text = payload.strip()
+        if not text:
+            return {}
+        try:
+            decoded = json.loads(text)
+        except Exception:
+            return {"input": text}
+        return decoded if isinstance(decoded, dict) else {"input": decoded}
+    if payload is None:
+        return {}
+    return {"input": payload}
+
+
+async def stream_chat_agent_events(target_agent, payload, config=None):
+    if config is None:
+        config = {"configurable": {"thread_id": THREAD_ID}}
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        print("[main.ai_call] Waiting for lock")
+        async with agent_lock:
+            print("[main.ai_call] Start Invoking llm")
+            try:
+                async for event in target_agent.astream_events(payload, config=config, version="v2"):
+                    if not isinstance(event, dict):
+                        continue
+                    event_name = str(event.get("event") or "").strip().lower()
+                    data = event.get("data") or {}
+                    if event_name == "on_chat_model_stream":
+                        chunk = data.get("chunk")
+                        if not chunk or not _is_ai_message_chunk(chunk):
+                            continue
+                        delta_text = _message_content_to_text(getattr(chunk, "content", None))
+                        if delta_text:
+                            yield {"type": "delta", "content": delta_text}
+                        continue
+                    if event_name == "on_tool_start":
+                        yield {
+                            "type": "tool_start",
+                            "tool_name": str(event.get("name") or data.get("name") or "tool").strip(),
+                            "args": _normalize_tool_args(data.get("input")),
+                            "call_id": str(event.get("run_id") or ""),
+                        }
+                        continue
+                    if event_name == "on_tool_end":
+                        yield {
+                            "type": "tool_result",
+                            "tool_name": str(event.get("name") or data.get("name") or "tool").strip(),
+                            "output": _tool_value_to_text(data.get("output")),
+                            "call_id": str(event.get("run_id") or ""),
+                        }
+                        continue
+                print("[main.ai_call] End Invoking llm")
+                return
+            except Exception as e:
+                if _is_rate_limit_error(e) and attempt < max_attempts:
+                    print(f"[main.ai_call] 429 retry attempt={attempt}/{max_attempts}")
+                else:
+                    raise
+        await _sleep_backoff(attempt)
+
+
 async def rebuild_runtime(*, reset_dialog: bool = False, no_initial_chat: bool = False):
     print("[main] Rebuilding runtime with reset_dialog =", reset_dialog, "no_initial_chat =", no_initial_chat)
     global agent, checkpointer, conn, storer, conn_for_store, AGENT_NAME, AGENT_ROOT
@@ -1081,14 +1157,19 @@ async def chat_websocket(websocket: WebSocket):
                 await websocket.send_text(json.dumps({"type": "start"}, ensure_ascii=False))
                 reply = ""
                 print("[main] Received chat message:", text)
-                async for message_chunk, metadata in stream_agent_locked(agent,{"messages":[{"role":"user","content":text}]}):
-                    if message_chunk.content and metadata.get("langgraph_node")!="tools" and _is_ai_message_chunk(message_chunk):
-                        delta_text = _message_content_to_text(message_chunk.content)
+                async for event in stream_chat_agent_events(agent, {"messages":[{"role":"user","content":text}]}) :
+                    if not isinstance(event, dict):
+                        continue
+                    if event.get("type") == "delta":
+                        delta_text = _message_content_to_text(event.get("content"))
                         if not delta_text:
                             continue
                         reply += delta_text
                         print(delta_text, end="|", flush=True)
                         await websocket.send_text(json.dumps({"type": "delta", "content": delta_text}, ensure_ascii=False))
+                        continue
+                    if event.get("type") in {"tool_start", "tool_result"}:
+                        await websocket.send_text(json.dumps(event, ensure_ascii=False))
                 schedule_rag_record_sync(text, reply)
                 await websocket.send_text(json.dumps({"type": "done", "reply": reply}, ensure_ascii=False))
                 print()

@@ -249,6 +249,7 @@ body.click-through .hil-approval-shell {
   box-shadow: 0 14px 32px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.05);
   backdrop-filter: blur(12px);
   transform: translate3d(0,0,0);
+  max-height: 150px;
 }
 
 /* VAD probability meter styling */
@@ -268,13 +269,119 @@ body.click-through .hil-approval-shell {
   font-size:20px;
   line-height:1.45;
   text-align: left;
-  white-space: pre-wrap;
+  white-space: normal;
   word-break: break-word;
   overflow-wrap: anywhere;
-  max-height: calc(1.45em * 3);
+  max-height: min(46vh, 420px);
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
+}
+
+.result-bubble-main {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.tool-call-card {
+  margin-top: 10px;
+}
+
+.tool-call-divider {
+  height: 1px;
+  margin: 0 0 8px;
+  background: linear-gradient(90deg, transparent, rgba(107,114,128,0.48), transparent);
+}
+
+.tool-call-details {
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.05);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  overflow: hidden;
+}
+
+.tool-call-summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  padding: 10px 12px;
+  user-select: none;
+}
+
+.tool-call-summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-call-summary::before {
+  content: '▶';
+  display: inline-block;
+  margin-right: 8px;
+  font-size: 12px;
+  color: #4b5563;
+  transition: transform 0.16s ease;
+}
+
+.tool-call-details[open] .tool-call-summary::before {
+  transform: rotate(90deg);
+}
+
+.tool-call-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: inherit;
+}
+
+.tool-call-status {
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
+  background: rgba(148, 163, 184, 0.16);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.tool-call-card.is-running .tool-call-status {
+  color: #9a3412;
+  background: rgba(251, 191, 36, 0.22);
+}
+
+.tool-call-card.is-done .tool-call-status {
+  color: #166534;
+  background: rgba(74, 222, 128, 0.18);
+}
+
+.tool-call-body {
+  padding: 0 12px 12px;
+}
+
+.tool-call-section-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #64748b;
+  margin: 8px 0 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tool-call-pre {
+  margin: 0;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #0f172a;
+  background: rgba(255,255,255,0.75);
+  border-radius: 10px;
+  border: 1px solid rgba(203,213,225,0.7);
 }
 
 #asrText::-webkit-scrollbar {
