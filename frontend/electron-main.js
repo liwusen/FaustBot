@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const https = require('https');
+const { pathToFileURL } = require('url');
 const { spawn } = require('child_process');
 
 let mainWindow = null;
@@ -27,6 +28,29 @@ function registerFaustProtocolClient() {
     console.warn('[deeplink] register protocol failed', e);
     return false;
   }
+}
+
+function getFrontendAppDir() {
+  return __dirname;
+}
+
+function getFrontendResourceDir() {
+  return app.isPackaged ? process.resourcesPath : __dirname;
+}
+
+function getRepoRootDir() {
+  return app.isPackaged
+    ? path.resolve(process.resourcesPath, '..', '..', '..')
+    : path.resolve(__dirname, '..');
+}
+
+function resolveFrontendAssetPath(relativePath) {
+  const normalized = String(relativePath || '').replace(/^[/\\]+/, '').replace(/\\/g, '/');
+  if (!normalized) return '';
+  const baseDir = app.isPackaged && normalized.startsWith('2D/')
+    ? process.resourcesPath
+    : getFrontendAppDir();
+  return pathToFileURL(path.join(baseDir, normalized)).toString();
 }
 
 function postJson(url, payload, timeoutMs = 20000) {
@@ -310,13 +334,13 @@ function createWindow(){
     resizable: false,
     alwaysOnTop: true,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(getFrontendAppDir(), 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
     }
   });
 
-  const index = path.join(__dirname, 'index.html');
+  const index = path.join(getFrontendAppDir(), 'index.html');
   mainWindow.loadFile(index);
   // start fullscreen. mouse-ignore (click-through) is controlled from renderer via IPC
 
@@ -376,10 +400,14 @@ function spawnDetachedWithCheck(cmd, args, options = {}) {
 }
 
 async function launchPySideConfiger(){
-  const scriptPath = path.join(__dirname, 'configer_pyside6.py');
-  const startBatPath = path.join(__dirname, 'start-configer.bat');
-  const runtimePythonPath = path.join(__dirname, '..', '.runtime', 'python.exe');
-  const bootstrapPath = path.join(__dirname, '..', 'embedded_python_bootstrap.py');
+  const resourceDir = getFrontendResourceDir();
+  const repoRootDir = getRepoRootDir();
+  const scriptPath = path.join(resourceDir, 'configer_pyside6.py');
+  const startBatPath = path.join(resourceDir, 'start-configer.bat');
+  const runtimePythonPath = path.join(repoRootDir, '.runtime', 'python.exe');
+  const bootstrapPath = app.isPackaged
+    ? path.join(resourceDir, 'embedded_python_bootstrap.py')
+    : path.join(repoRootDir, 'embedded_python_bootstrap.py');
   if (!fs.existsSync(scriptPath)) {
     return { ok: false, error: `Configer 脚本不存在: ${scriptPath}` };
   }
@@ -417,11 +445,17 @@ async function launchPySideConfiger(){
 
 function getTrayIconPath(){
   const candidates = [
+    path.join(getFrontendResourceDir(), 'fake_neuro.ico'),
+    path.join(getFrontendResourceDir(), 'dmx1.png'),
     path.join(__dirname, '..', '..', 'live-2d', 'fake_neuro.ico'),
     path.join(__dirname, '..', '..', 'image', 'dmx1.png'),
   ];
   return candidates.find((candidate)=> fs.existsSync(candidate)) || null;
 }
+
+ipcMain.handle('resolve-frontend-asset-path', (_event, relativePath) => {
+  return resolveFrontendAssetPath(relativePath);
+});
 
 function showMainWindow(){
   if (!mainWindow) return false;

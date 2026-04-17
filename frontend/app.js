@@ -64,6 +64,21 @@
   let textChatBarYFactor = 0.53;
   let quickControllerXOffset = -12;
 
+  async function resolveFrontendAssetPath(rawPath){
+    const normalized = String(rawPath || '').trim().replace(/\\/g, '/');
+    if (!normalized) return normalized;
+    if (/^(https?:|file:)/i.test(normalized)) return normalized;
+    if (/^[a-zA-Z]:\//.test(normalized) || normalized.startsWith('/')) return normalized;
+    if (window.api && typeof window.api.resolveFrontendAssetPath === 'function') {
+      try {
+        return await window.api.resolveFrontendAssetPath(normalized);
+      } catch (e) {
+        console.warn('resolveFrontendAssetPath failed', normalized, e);
+      }
+    }
+    return normalized;
+  }
+
   function ensureNimbleHost(){
     let host = document.getElementById('nimble-host');
     if (host) return host;
@@ -439,7 +454,8 @@
   async function readModelDefinition(path){
     if (!path) return null;
     try{
-      const r = await fetch(path);
+      const resolvedPath = await resolveFrontendAssetPath(path);
+      const r = await fetch(resolvedPath);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return await r.json();
     }catch(e){
@@ -1777,11 +1793,13 @@
       return;
     }
     showOverlay('加载模型: ' + path);
-    readModelDefinition(path).then((modelDef)=>{
+    resolveFrontendAssetPath(path).then((resolvedPath)=>{
+      return readModelDefinition(resolvedPath).then((modelDef)=> ({ modelDef, resolvedPath }));
+    }).then(({ modelDef, resolvedPath })=>{
       if (loadRequestId !== activeModelLoadRequestId) throw new Error('stale model load request');
       availableMotions = extractMotionNames(modelDef);
       currentLipSyncParamIds = extractLipSyncParamIds(modelDef);
-      return Live2DModel.from(path);
+      return Live2DModel.from(resolvedPath);
     }).then(model => {
       if (loadRequestId !== activeModelLoadRequestId) return;
       // 移除上个模型

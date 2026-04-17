@@ -4,7 +4,7 @@ fastapi
 uvicorn
 python-multipart
 numpy>=2
-funasr>=0.9.6
+
 websockets
 modelscope
 onnxruntime

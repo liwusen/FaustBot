@@ -5,7 +5,8 @@ contextBridge.exposeInMainWorld('api', {
   focusMainWindow: () => ipcRenderer.invoke('focus-main-window'),
   hideToTray: () => ipcRenderer.invoke('hide-to-tray'),
   showFromTray: () => ipcRenderer.invoke('show-from-tray'),
-  openConfigWindow: () => ipcRenderer.invoke('open-config-window')
+  openConfigWindow: () => ipcRenderer.invoke('open-config-window'),
+  resolveFrontendAssetPath: (relativePath) => ipcRenderer.invoke('resolve-frontend-asset-path', String(relativePath || ''))
 });
 
 // Listen for faust commands forwarded from the main process

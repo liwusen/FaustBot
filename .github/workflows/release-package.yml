@@ -1,0 +1,73 @@
+name: Release Package
+
+on:
+  push:
+    tags:
+      - 'V*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-draft-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install cloud runtime and dependencies
+        shell: cmd
+        run: setup-runtime.bat --mode cloud --install-python yes --install-node yes
+
+      - name: Package frontend
+        shell: cmd
+        working-directory: frontend
+        run: npm run package
+
+      - name: Package mc-operator
+        shell: cmd
+        working-directory: backend\minecraft\mc-operator
+        run: npm run package
+
+      - name: Prepare release archive
+        id: prepare_archive
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $repoName = "faust-$tag-windows"
+          $stageDir = Join-Path $env:RUNNER_TEMP $repoName
+          $archivePath = Join-Path $env:RUNNER_TEMP ("$repoName.zip")
+
+          if (Test-Path $stageDir) {
+            Remove-Item $stageDir -Recurse -Force
+          }
+          if (Test-Path $archivePath) {
+            Remove-Item $archivePath -Force
+          }
+
+          New-Item -ItemType Directory -Path $stageDir | Out-Null
+
+          $excludeDirs = @('.git', '.github')
+          Get-ChildItem -LiteralPath $env:GITHUB_WORKSPACE -Force | Where-Object {
+            $excludeDirs -notcontains $_.Name
+          } | ForEach-Object {
+            $target = Join-Path $stageDir $_.Name
+            Copy-Item -LiteralPath $_.FullName -Destination $target -Recurse -Force
+          }
+
+          Compress-Archive -Path (Join-Path $stageDir '*') -DestinationPath $archivePath -CompressionLevel Optimal
+          "archive_path=$archivePath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: true
+          generate_release_notes: true
+          files: ${{ steps.prepare_archive.outputs.archive_path }}

@@ -7,12 +7,71 @@
   "author": "allenlee",
   "description": "Faust Live2D frontend application",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "package": "electron-builder --win portable"
   },
   "devDependencies": {
-    "electron": "^41.1.1"
+    "electron": "^41.1.1",
+    "electron-builder": "^26.0.12"
   },
   "dependencies": {
     "ws": "^8.19.0"
+  },
+  "build": {
+    "appId": "com.faustbot.live2dfrontend",
+    "productName": "FaustLive2DFrontend",
+    "asar": true,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron-main.js",
+      "preload.js",
+      "index.html",
+      "app.js",
+      "styles.css",
+      "config-window.html",
+      "config-window.css",
+      "config-window.js",
+      "libs/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "2D",
+        "to": "2D"
+      },
+      {
+        "from": "configer_pyside6.py",
+        "to": "configer_pyside6.py"
+      },
+      {
+        "from": "live2d_downloader.py",
+        "to": "live2d_downloader.py"
+      },
+      {
+        "from": "start-configer.bat",
+        "to": "start-configer.bat"
+      },
+      {
+        "from": "download_live2d.bat",
+        "to": "download_live2d.bat"
+      },
+      {
+        "from": "../embedded_python_bootstrap.py",
+        "to": "embedded_python_bootstrap.py"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "FaustLive2DFrontend.exe"
+    }
   }
 }

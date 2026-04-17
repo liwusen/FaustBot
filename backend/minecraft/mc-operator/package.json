@@ -4,8 +4,10 @@
 	"private": true,
 	"type": "commonjs",
 	"main": "src/index.js",
+	"bin": "src/index.js",
 	"scripts": {
-		"start": "node src/index.js"
+		"start": "node src/index.js",
+		"package": "node tools/package-dist.js"
 	},
 	"dependencies": {
 		"minecraft-data": "^3.80.0",
