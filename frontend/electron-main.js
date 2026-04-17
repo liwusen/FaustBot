@@ -45,12 +45,44 @@ function getRepoRootDir() {
 }
 
 function resolveFrontendAssetPath(relativePath) {
-  const normalized = String(relativePath || '').replace(/^[/\\]+/, '').replace(/\\/g, '/');
-  if (!normalized) return '';
-  const baseDir = app.isPackaged && normalized.startsWith('2D/')
-    ? process.resourcesPath
-    : getFrontendAppDir();
-  return pathToFileURL(path.join(baseDir, normalized)).toString();
+  const raw = String(relativePath || '').trim();
+  if (!raw) return '';
+  if (/^https?:/i.test(raw) || /^file:/i.test(raw)) return raw;
+
+  const normalized = raw.replace(/\\/g, '/');
+  const repoRootDir = getRepoRootDir();
+  const frontendAppDir = getFrontendAppDir();
+  const resourceDir = getFrontendResourceDir();
+  const candidatePaths = [];
+
+  if (/^[a-zA-Z]:\//.test(normalized) || normalized.startsWith('/')) {
+    candidatePaths.push(normalized);
+  } else {
+    const trimmed = normalized.replace(/^[/\\]+/, '');
+    const withoutFrontendPrefix = trimmed.replace(/^frontend\//i, '');
+
+    candidatePaths.push(path.join(frontendAppDir, trimmed));
+    candidatePaths.push(path.join(frontendAppDir, withoutFrontendPrefix));
+    candidatePaths.push(path.join(repoRootDir, trimmed));
+    candidatePaths.push(path.join(repoRootDir, withoutFrontendPrefix));
+
+    if (/^2D\//i.test(withoutFrontendPrefix)) {
+      candidatePaths.push(path.join(resourceDir, withoutFrontendPrefix));
+      candidatePaths.push(path.join(frontendAppDir, withoutFrontendPrefix));
+    }
+  }
+
+  for (const candidate of candidatePaths) {
+    const resolved = path.resolve(candidate);
+    if (fs.existsSync(resolved)) {
+      return pathToFileURL(resolved).toString();
+    }
+  }
+
+  const fallbackBaseDir = app.isPackaged && normalized.replace(/^[/\\]+/, '').startsWith('2D/')
+    ? resourceDir
+    : frontendAppDir;
+  return pathToFileURL(path.join(fallbackBaseDir, normalized.replace(/^[/\\]+/, ''))).toString();
 }
 
 function postJson(url, payload, timeoutMs = 20000) {

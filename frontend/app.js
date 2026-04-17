@@ -67,7 +67,6 @@
     const normalized = String(rawPath || '').trim().replace(/\\/g, '/');
     if (!normalized) return normalized;
     if (/^(https?:|file:)/i.test(normalized)) return normalized;
-    if (/^[a-zA-Z]:\//.test(normalized) || normalized.startsWith('/')) return normalized;
     if (window.api && typeof window.api.resolveFrontendAssetPath === 'function') {
       try {
         return await window.api.resolveFrontendAssetPath(normalized);
@@ -454,6 +453,7 @@
     if (!path) return null;
     try{
       const resolvedPath = await resolveFrontendAssetPath(path);
+      if (!resolvedPath) throw new Error('empty resolved model path');
       const r = await fetch(resolvedPath);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return await r.json();
@@ -1793,9 +1793,12 @@
     }
     showOverlay('加载模型: ' + path);
     resolveFrontendAssetPath(path).then((resolvedPath)=>{
+      console.log('Resolved model path:', resolvedPath);
+      if (!resolvedPath) throw new Error('模型路径解析失败');
       return readModelDefinition(resolvedPath).then((modelDef)=> ({ modelDef, resolvedPath }));
     }).then(({ modelDef, resolvedPath })=>{
       if (loadRequestId !== activeModelLoadRequestId) throw new Error('stale model load request');
+      if (!modelDef) throw new Error('无法读取模型定义文件');
       availableMotions = extractMotionNames(modelDef);
       currentLipSyncParamIds = extractLipSyncParamIds(modelDef);
       return Live2DModel.from(resolvedPath);
