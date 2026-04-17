@@ -19,6 +19,7 @@ set "TTS_VARIANT=standard"
 set "INFER_MODE=cloud"
 set "SHOW_HELP=0"
 set "MODE_PROVIDED=0"
+set "SKIP_ADMIN_CHECK=0"
 
 cd /d "%~dp0"
 set "RUNTIME_DIR=%CD%\.runtime"
@@ -33,6 +34,8 @@ echo -----------------------------------------
 echo FaustBot 安装程序
 echo 使用命令行参数安装 Python、PyTorch、Python 依赖、Node.js 依赖和 TTS 模型。
 echo -----------------------------------------
+
+if /i "%GITHUB_ACTIONS%"=="true" set "SKIP_ADMIN_CHECK=1"
 
 if not "%~1"=="" goto parse_args_loop
 goto after_parse
@@ -160,23 +163,27 @@ if /i "%INFER_MODE%"=="local" (
   set "INSTALL_TTS=0"
 )
 
-net session >nul 2>&1
-if errorlevel 1 (
-  echo 需要管理员权限，正在重新启动...
-  if "%INSTALL_PYTHON%"=="1" (
-    set "INSTALL_PYTHON_TEXT=yes"
-  ) else (
-    set "INSTALL_PYTHON_TEXT=no"
+if "%SKIP_ADMIN_CHECK%"=="0" (
+  net session >nul 2>&1
+  if errorlevel 1 (
+    echo 需要管理员权限，正在重新启动...
+    if "%INSTALL_PYTHON%"=="1" (
+      set "INSTALL_PYTHON_TEXT=yes"
+    ) else (
+      set "INSTALL_PYTHON_TEXT=no"
+    )
+    if "%INSTALL_NODE%"=="1" (
+      set "INSTALL_NODE_TEXT=yes"
+    ) else (
+      set "INSTALL_NODE_TEXT=no"
+    )
+    set "FAUST_SETUP_ARGS=--mode %INFER_MODE% --source %SOURCE_MODE% --install-python !INSTALL_PYTHON_TEXT! --install-node !INSTALL_NODE_TEXT!"
+    if /i "%INFER_MODE%"=="local" set "FAUST_SETUP_ARGS=!FAUST_SETUP_ARGS! --tts-variant %TTS_VARIANT%"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -Verb RunAs -ArgumentList $env:FAUST_SETUP_ARGS"
+    exit /b 0
   )
-  if "%INSTALL_NODE%"=="1" (
-    set "INSTALL_NODE_TEXT=yes"
-  ) else (
-    set "INSTALL_NODE_TEXT=no"
-  )
-  set "FAUST_SETUP_ARGS=--mode %INFER_MODE% --source %SOURCE_MODE% --install-python !INSTALL_PYTHON_TEXT! --install-node !INSTALL_NODE_TEXT!"
-  if /i "%INFER_MODE%"=="local" set "FAUST_SETUP_ARGS=!FAUST_SETUP_ARGS! --tts-variant %TTS_VARIANT%"
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -Verb RunAs -ArgumentList $env:FAUST_SETUP_ARGS"
-  exit /b 0
+) else (
+  echo 检测到 GitHub Actions，跳过管理员权限检查。
 )
 
 if "%INSTALL_PYTHON%"=="1" (
@@ -302,16 +309,14 @@ if "%INSTALL_NODE%"=="1" (
     goto fail
   )
   pushd "%FRONTEND_DIR%"
-  npm config set registry %NPM_REGISTRY%
-  npm install
+  npm install --registry=%NPM_REGISTRY%
   if errorlevel 1 (
     popd
     goto fail
   )
   popd
   pushd "%MC_OPERATOR_DIR%"
-  npm config set registry %NPM_REGISTRY%
-  npm install
+  npm install --registry=%NPM_REGISTRY%
   if errorlevel 1 (
     popd
     goto fail
