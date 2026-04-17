@@ -1,6 +1,5 @@
 
 
-// 简单的 Live2D 展示 demo，依赖 PIXI 和 pixi-live2d-display
 (() => {
 
   const defaultModel = '2D/hiyori_pro_zh/hiyori_pro_t11.model3.json';

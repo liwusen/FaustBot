@@ -23,7 +23,7 @@ jobs:
 
       - name: Install cloud runtime and dependencies
         shell: cmd
-        run: setup-runtime.bat --mode cloud --install-python yes --install-node yes
+        run: setup-runtime.bat --mode cloud --source official --install-python yes --install-node yes
 
       - name: Package frontend
         shell: cmd
