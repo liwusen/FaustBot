@@ -1,4 +1,8 @@
-# FaustBot-llm-vtuber
+<p align="center">
+    <img src="./document/assets/FaustBot.icon.tiny.png" alt="FaustBot icon" />
+</p>
+
+<h1 align="center">FaustBot-llm-vtuber</h1>
 
 ---
 
@@ -56,15 +60,13 @@
 
 ### 功能计划(长期)
 
-| 大饼          | 解释                 | 预计时间        |
-| ----------- | ------------------ | ----------- |
-| Minecraft   | 使用Mineflyer，从底层完成  | 完成          |
-| 原创Live 2d形象 |                    | 待定          |
-| TTS 歌曲转换    |                    |             |
-| 游览器 操作      | Agent Browser 能力接入 | 完成(Skill系统) |
-| OCR/VLLM支持  |                    | 部分完成        |
-| 前端优化        |                    | 完成          |
-| 灵动交互        | 允许AI编写HTML实现交互     | 完成          |
+| 大饼         | 解释                 | 预计时间        |
+| ---------- | ------------------ | ----------- |
+| Minecraft  | 使用Mineflyer，从底层完成  | 完成          |
+| 游览器 操作     | Agent Browser 能力接入 | 完成(Skill系统) |
+| OCR/VLLM支持 |                    | 完成          |
+| 前端优化       |                    | 完成          |
+| 灵动交互       | 允许AI编写HTML实现交互     | 完成          |
 
 ---
 
