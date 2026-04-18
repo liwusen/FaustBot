@@ -8,7 +8,7 @@
   "description": "Faust Live2D frontend application",
   "scripts": {
     "start": "electron .",
-    "package": "electron-builder --win portable"
+    "package": "electron-builder --win dir"
   },
   "devDependencies": {
     "electron": "^41.1.1",
@@ -38,10 +38,6 @@
     ],
     "extraResources": [
       {
-        "from": "2D",
-        "to": "2D"
-      },
-      {
         "from": "configer_pyside6.py",
         "to": "configer_pyside6.py"
       },
@@ -65,13 +61,12 @@
     "win": {
       "target": [
         {
-          "target": "portable",
+          "target": "dir",
           "arch": [
             "x64"
           ]
         }
-      ],
-      "artifactName": "FaustLive2DFrontend.exe"
+      ]
     }
   }
 }

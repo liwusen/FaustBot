@@ -25,10 +25,34 @@ jobs:
         shell: cmd
         run: setup-runtime.bat --mode cloud --source official --install-python yes --install-node yes
 
+      - name: Download VAD model
+        shell: cmd
+        run: .runtime\python.exe embedded_python_bootstrap.py backend\faust_backend\download_vad.py
+
       - name: Package frontend
         shell: cmd
         working-directory: frontend
         run: npm run package
+
+      - name: Copy win-unpacked into frontend root
+        shell: pwsh
+        run: |
+          $sourceDir = Join-Path $env:GITHUB_WORKSPACE 'frontend/dist/win-unpacked'
+          $targetDir = Join-Path $env:GITHUB_WORKSPACE 'frontend'
+
+          if (-not (Test-Path $sourceDir)) {
+            throw "win-unpacked output not found: $sourceDir"
+          }
+
+          Get-ChildItem -LiteralPath $sourceDir -Force | ForEach-Object {
+            $targetPath = Join-Path $targetDir $_.Name
+            if (Test-Path $targetPath) {
+              Remove-Item $targetPath -Recurse -Force
+            }
+            Copy-Item -LiteralPath $_.FullName -Destination $targetPath -Recurse -Force
+          }
+
+          Remove-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'frontend/dist') -Recurse -Force
 
       - name: Package mc-operator
         shell: cmd

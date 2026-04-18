@@ -1,16 +1,30 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, Tray, Menu, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, Tray, Menu, dialog, protocol } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const https = require('https');
-const { pathToFileURL } = require('url');
+const { URL } = require('url');
 const { spawn } = require('child_process');
 
 let mainWindow = null;
 let tray = null;
 let pendingDeepLinks = [];
 const FAUST_PROTOCOL = 'faustbot';
+const STATIC_PROTOCOL = 'static';
 const FAUST_BACKEND_INSTALL_API = 'http://127.0.0.1:13900/faust/admin/plugin-market/install';
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: STATIC_PROTOCOL,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+      corsEnabled: true,
+    },
+  },
+]);
 
 function registerFaustProtocolClient() {
   try {
@@ -34,55 +48,163 @@ function getFrontendAppDir() {
   return __dirname;
 }
 
+function findFrontendProjectDir() {
+  if (!app.isPackaged) return __dirname;
+
+  const exeDir = path.dirname(process.execPath);
+  const candidates = [
+    exeDir,
+    path.resolve(exeDir, '..'),
+    path.resolve(exeDir, '..', 'frontend'),
+    path.resolve(process.resourcesPath, '..', '..'),
+    path.resolve(process.resourcesPath, '..', '..', 'frontend'),
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    if (fs.existsSync(path.join(candidate, '2D')) && fs.existsSync(path.join(candidate, 'index.html'))) {
+      return candidate;
+    }
+  }
+
+  return exeDir;
+}
+
 function getFrontendResourceDir() {
   return app.isPackaged ? process.resourcesPath : __dirname;
 }
 
 function getRepoRootDir() {
-  return app.isPackaged
-    ? path.resolve(process.resourcesPath, '..', '..', '..')
-    : path.resolve(__dirname, '..');
+  return path.resolve(findFrontendProjectDir(), '..');
+}
+
+function getStaticBases() {
+  const frontendProjectDir = findFrontendProjectDir();
+  const repoRootDir = getRepoRootDir();
+  return {
+    frontend: frontendProjectDir,
+    repo: repoRootDir,
+  };
+}
+
+function toStaticUrl(baseKey, absolutePath) {
+  const bases = getStaticBases();
+  const baseDir = bases[baseKey];
+  if (!baseDir) return '';
+  const resolvedBase = path.resolve(baseDir);
+  const resolvedPath = path.resolve(absolutePath);
+  const relativePath = path.relative(resolvedBase, resolvedPath);
+  if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+    return '';
+  }
+  const encodedRelativePath = relativePath.split(path.sep).map(encodeURIComponent).join('/');
+  return `${STATIC_PROTOCOL}://${baseKey}/${encodedRelativePath}`;
+}
+
+function resolveStaticRequestToPath(requestUrl) {
+  const parsed = new URL(requestUrl);
+  const baseKey = String(parsed.hostname || '').trim();
+  const bases = getStaticBases();
+  const baseDir = bases[baseKey];
+  if (!baseDir) return null;
+
+  const relativePath = decodeURIComponent(parsed.pathname || '')
+    .replace(/^\/+/,'')
+    .replace(/\//g, path.sep);
+  const resolvedBase = path.resolve(baseDir);
+  const resolvedPath = path.resolve(baseDir, relativePath);
+  if (!resolvedPath.startsWith(resolvedBase + path.sep) && resolvedPath !== resolvedBase) {
+    return null;
+  }
+  return resolvedPath;
+}
+
+function registerStaticProtocol() {
+  protocol.handle(STATIC_PROTOCOL, async (request) => {
+    try {
+      const resolvedPath = resolveStaticRequestToPath(request.url);
+      if (!resolvedPath) {
+        return new Response('Forbidden', { status: 403 });
+      }
+      if (!fs.existsSync(resolvedPath) || !fs.statSync(resolvedPath).isFile()) {
+        return new Response('Not Found', { status: 404 });
+      }
+      const data = fs.readFileSync(resolvedPath);
+      return new Response(data, {
+        status: 200,
+        headers: {
+          'Content-Type': getMimeType(resolvedPath),
+          'Cache-Control': 'no-cache',
+        },
+      });
+    } catch (error) {
+      console.error('[static] request failed', request.url, error);
+      return new Response('Internal Server Error', { status: 500 });
+    }
+  });
+}
+
+function getMimeType(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.json') return 'application/json; charset=utf-8';
+  if (ext === '.png') return 'image/png';
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  if (ext === '.moc3') return 'application/octet-stream';
+  if (ext === '.physics3.json') return 'application/json; charset=utf-8';
+  if (ext === '.motion3.json') return 'application/json; charset=utf-8';
+  if (ext === '.exp3.json') return 'application/json; charset=utf-8';
+  if (ext === '.wav') return 'audio/wav';
+  return 'application/octet-stream';
 }
 
 function resolveFrontendAssetPath(relativePath) {
   const raw = String(relativePath || '').trim();
   if (!raw) return '';
-  if (/^https?:/i.test(raw) || /^file:/i.test(raw)) return raw;
+  if (/^https?:/i.test(raw) || new RegExp(`^${STATIC_PROTOCOL}:`, 'i').test(raw)) return raw;
 
   const normalized = raw.replace(/\\/g, '/');
   const repoRootDir = getRepoRootDir();
-  const frontendAppDir = getFrontendAppDir();
-  const resourceDir = getFrontendResourceDir();
+  const frontendProjectDir = findFrontendProjectDir();
   const candidatePaths = [];
 
   if (/^[a-zA-Z]:\//.test(normalized) || normalized.startsWith('/')) {
-    candidatePaths.push(normalized);
+    candidatePaths.push({ baseKey: null, path: normalized });
   } else {
     const trimmed = normalized.replace(/^[/\\]+/, '');
     const withoutFrontendPrefix = trimmed.replace(/^frontend\//i, '');
 
-    candidatePaths.push(path.join(frontendAppDir, trimmed));
-    candidatePaths.push(path.join(frontendAppDir, withoutFrontendPrefix));
-    candidatePaths.push(path.join(repoRootDir, trimmed));
-    candidatePaths.push(path.join(repoRootDir, withoutFrontendPrefix));
+    candidatePaths.push({ baseKey: 'frontend', path: path.join(frontendProjectDir, trimmed) });
+    candidatePaths.push({ baseKey: 'frontend', path: path.join(frontendProjectDir, withoutFrontendPrefix) });
+    candidatePaths.push({ baseKey: 'repo', path: path.join(repoRootDir, trimmed) });
+    candidatePaths.push({ baseKey: 'repo', path: path.join(repoRootDir, withoutFrontendPrefix) });
 
     if (/^2D\//i.test(withoutFrontendPrefix)) {
-      candidatePaths.push(path.join(resourceDir, withoutFrontendPrefix));
-      candidatePaths.push(path.join(frontendAppDir, withoutFrontendPrefix));
+      candidatePaths.push({ baseKey: 'frontend', path: path.join(frontendProjectDir, withoutFrontendPrefix) });
+      candidatePaths.push({ baseKey: 'repo', path: path.join(repoRootDir, 'frontend', withoutFrontendPrefix) });
     }
   }
 
   for (const candidate of candidatePaths) {
-    const resolved = path.resolve(candidate);
+    const resolved = path.resolve(candidate.path);
     if (fs.existsSync(resolved)) {
-      return pathToFileURL(resolved).toString();
+      if (candidate.baseKey) {
+        const staticUrl = toStaticUrl(candidate.baseKey, resolved);
+        if (staticUrl) return staticUrl;
+      }
+
+      const bases = getStaticBases();
+      for (const [baseKey, baseDir] of Object.entries(bases)) {
+        const resolvedBase = path.resolve(baseDir);
+        if (resolved === resolvedBase || resolved.startsWith(resolvedBase + path.sep)) {
+          const staticUrl = toStaticUrl(baseKey, resolved);
+          if (staticUrl) return staticUrl;
+        }
+      }
     }
   }
 
-  const fallbackBaseDir = app.isPackaged && normalized.replace(/^[/\\]+/, '').startsWith('2D/')
-    ? resourceDir
-    : frontendAppDir;
-  return pathToFileURL(path.join(fallbackBaseDir, normalized.replace(/^[/\\]+/, ''))).toString();
+  const fallbackRelative = normalized.replace(/^[/\\]+/, '').replace(/^frontend\//i, '');
+  return `${STATIC_PROTOCOL}://frontend/${fallbackRelative.split('/').map(encodeURIComponent).join('/')}`;
 }
 
 function postJson(url, payload, timeoutMs = 20000) {
@@ -562,6 +684,7 @@ app.on('open-url', (event, url) => {
 });
 
 app.whenReady().then(()=>{
+  registerStaticProtocol();
   registerFaustProtocolClient();
   createWindow();
   createTray();

@@ -61,16 +61,54 @@ agent=None
 agent_lock = asyncio.Lock()
 plugin_manager = PluginManager()
 plugin_heartbeat_task = None
+RUNTIME_READY = False
+RUNTIME_STATUS = "starting"
+RUNTIME_ERROR = ""
 AGENT_NAME=conf.AGENT_NAME
 PROMPT = ""
-if not os.path.exists(os.path.join("agents",f"{AGENT_NAME}")):
-    print(f"[main] Agent file for '{AGENT_NAME}' not found. Please make sure 'agents/{AGENT_NAME}' exists.")
-    exit(1)
 AGENT_ROOT=os.path.join("agents",f"{AGENT_NAME}")
+
+
+def _set_runtime_state(*, ready: bool, status: str, error: str = ""):
+    global RUNTIME_READY, RUNTIME_STATUS, RUNTIME_ERROR
+    RUNTIME_READY = bool(ready)
+    RUNTIME_STATUS = str(status or ("ready" if ready else "waiting_for_config"))
+    RUNTIME_ERROR = str(error or "")
+    llm_tools.STARTED = RUNTIME_READY
+
+
+def _runtime_not_ready_message() -> str:
+    base = "后端已启动，但 Agent 尚未就绪。请先在配置器中填写私密配置或修正 Agent 配置，然后执行重载。"
+    detail = str(RUNTIME_ERROR or "").strip()
+    if detail:
+        return f"{base} 当前原因: {detail}"
+    return base
+
+
+def _runtime_status_payload() -> dict:
+    return {
+        "ready": RUNTIME_READY,
+        "status": RUNTIME_STATUS,
+        "error": RUNTIME_ERROR,
+        "agent_name": AGENT_NAME,
+        "agent_root": AGENT_ROOT,
+        "private_config_missing": bool(getattr(conf, "PRIVATE_CONFIG_WAS_MISSING", False)),
+        "private_config_auto_created": bool(getattr(conf, "PRIVATE_CONFIG_AUTO_CREATED", False)),
+    }
+
+
+def _ensure_agent_runtime_ready() -> None:
+    if agent is None or not RUNTIME_READY:
+        raise RuntimeError(_runtime_not_ready_message())
+
+
 def makeup_init_prompt():
     global PROMPT, AGENT_ROOT, AGENT_NAME
     AGENT_NAME = conf.AGENT_NAME
     AGENT_ROOT=os.path.join("agents",f"{AGENT_NAME}")
+    if not os.path.exists(AGENT_ROOT):
+        PROMPT = ""
+        raise FileNotFoundError(f"Agent file for '{AGENT_NAME}' not found. Please make sure 'agents/{AGENT_NAME}' exists.")
     with open(os.path.join(AGENT_ROOT,"AGENT.md"),"r",encoding="utf-8") as f:
         PROMPT=f.read()
     with open(os.path.join(AGENT_ROOT,"ROLE.md"),"r",encoding="utf-8") as f:
@@ -79,7 +117,11 @@ def makeup_init_prompt():
         PROMPT+=f.read()
     with open(os.path.join(AGENT_ROOT,"TASK.md"),"r",encoding="utf-8") as f:
         PROMPT+=f.read()
-makeup_init_prompt()
+try:
+    makeup_init_prompt()
+except Exception as e:
+    print(f"[main] Initial prompt load skipped: {e}")
+    _set_runtime_state(ready=False, status="waiting_for_config", error=str(e))
 
 THREAD_ID=84
 # HTTP POST chat endpoint
@@ -354,108 +396,101 @@ async def stream_chat_agent_events(target_agent, payload, config=None):
 async def rebuild_runtime(*, reset_dialog: bool = False, no_initial_chat: bool = False):
     print("[main] Rebuilding runtime with reset_dialog =", reset_dialog, "no_initial_chat =", no_initial_chat)
     global agent, checkpointer, conn, storer, conn_for_store, AGENT_NAME, AGENT_ROOT
-    conf.reload_configs()
-    os.environ["DEEPSEEK_API_KEY"] = conf.CHAT_API_KEY
-    os.environ["SEARCHAPI_API_KEY"] = conf.SEARCH_API_KEY
-    os.environ["OPENAI_API_KEY"] = conf.CHAT_API_KEY
-    os.environ["OPENAI_BASE_URL"] = conf.CHAT_API_BASE
-    AGENT_NAME = conf.AGENT_NAME
-    AGENT_ROOT = os.path.join("agents", f"{AGENT_NAME}")
-    print("[main]Rubuilding Target Agent:", AGENT_NAME)
-    if not os.path.exists(AGENT_ROOT):
-        raise FileNotFoundError(f"Agent file for '{AGENT_NAME}' not found. Please make sure 'agents/{AGENT_NAME}' exists.")
+    try:
+        conf.reload_configs()
+        os.environ["DEEPSEEK_API_KEY"] = conf.CHAT_API_KEY
+        os.environ["SEARCHAPI_API_KEY"] = conf.SEARCH_API_KEY
+        os.environ["OPENAI_API_KEY"] = conf.CHAT_API_KEY
+        os.environ["OPENAI_BASE_URL"] = conf.CHAT_API_BASE
+        AGENT_NAME = conf.AGENT_NAME
+        AGENT_ROOT = os.path.join("agents", f"{AGENT_NAME}")
+        print("[main]Rubuilding Target Agent:", AGENT_NAME)
 
-    makeup_init_prompt()
-    llm_tools.refresh_runtime_paths()
-    plugin_reload = plugin_manager.reload()
-    print(f"[plugin] reload summary: {plugin_reload}")
-    _sync_plugin_trigger_filters()
-    if not args.save_in_memory:
-        try:
-            if 'conn' in globals() and conn:
-                await conn.commit()
-                await conn.close()
-        except Exception:
-            pass
-        try:
-            if 'conn_for_store' in globals() and conn_for_store:
-                await conn_for_store.commit()
-                await conn_for_store.close()
-        except Exception:
-            pass
-        conn = await aiosqlite.connect(pjoin(AGENT_ROOT,'faust_checkpoint.db'))
-        checkpointer=AsyncSqliteSaver(conn=conn)
-        conn_for_store = await aiosqlite.connect(pjoin(AGENT_ROOT,'faust_store.db'))
-        storer=AsyncSqliteStore(conn=conn_for_store)
-        print(f"[main] Checkpoint and store initialized with SQLite for rebuild.\
+        makeup_init_prompt()
+        llm_tools.refresh_runtime_paths()
+        plugin_reload = plugin_manager.reload()
+        print(f"[plugin] reload summary: {plugin_reload}")
+        _sync_plugin_trigger_filters()
+        if not args.save_in_memory:
+            try:
+                if 'conn' in globals() and conn:
+                    await conn.commit()
+                    await conn.close()
+            except Exception:
+                pass
+            try:
+                if 'conn_for_store' in globals() and conn_for_store:
+                    await conn_for_store.commit()
+                    await conn_for_store.close()
+            except Exception:
+                pass
+            os.makedirs(AGENT_ROOT, exist_ok=True)
+            conn = await aiosqlite.connect(pjoin(AGENT_ROOT,'faust_checkpoint.db'))
+            checkpointer=AsyncSqliteSaver(conn=conn)
+            conn_for_store = await aiosqlite.connect(pjoin(AGENT_ROOT,'faust_store.db'))
+            storer=AsyncSqliteStore(conn=conn_for_store)
+            print(f"[main] Checkpoint and store initialized with SQLite for rebuild.\
                pos_checkpoint: {pjoin(AGENT_ROOT,'faust_checkpoint.db')},\
                pos_store: {pjoin(AGENT_ROOT,'faust_store.db')}")
-    else:
-        checkpointer=InMemorySaver()
-        storer=InMemoryStore()
-    print("[main] Checkpoint and store initialized for rebuild.")
-    agent = _create_agent_with_extensions(model_name=conf.CHAT_MODEL, checkpointer=checkpointer, store=storer)
-    try:
-        await admin_runtime.align_rag_agent(AGENT_NAME)
+        else:
+            checkpointer=InMemorySaver()
+            storer=InMemoryStore()
+        print("[main] Checkpoint and store initialized for rebuild.")
+        agent = _create_agent_with_extensions(model_name=conf.CHAT_MODEL, checkpointer=checkpointer, store=storer)
+        try:
+            await admin_runtime.align_rag_agent(AGENT_NAME)
+        except Exception as e:
+            print(f"[main] RAG agent align skipped: {e}")
+        print("[main] Agent recreated for rebuild.")
+        checkpoint_exists = (not args.save_in_memory) and _has_checkpoint_db(AGENT_ROOT)
+        if no_initial_chat and checkpoint_exists:
+            print("[main] Runtime rebuild skipped initial chat because checkpoint exists and no_initial_chat=True")
+            _set_runtime_state(ready=True, status="ready")
+            return {
+                "agent_name": AGENT_NAME,
+                "agent_root": AGENT_ROOT,
+                "initial_chat_skipped": True,
+                "ready": True,
+                "status": RUNTIME_STATUS,
+                "error": "",
+            }
+        if reset_dialog:
+            await invoke_agent_locked(agent,{"messages":[{"role":"system","content":PROMPT}]})
+        else:
+            await invoke_agent_locked(agent,{"messages":[{"role":"user","content":f"请继续按当前角色设定工作。\n 如果你需要重新了解你的角色设定，请读取agents/{AGENT_NAME}/AGENT.md、ROLE.md、COREMEMORY.md、TASK.md等文件来获取最新的设定内容。\n 这一条对话无需写入日记"}]})
+        print("[main] Runtime rebuild completed.")
+        _set_runtime_state(ready=True, status="ready")
+        return {
+            "agent_name": AGENT_NAME,
+            "agent_root": AGENT_ROOT,
+            "initial_chat_skipped": False,
+            "ready": True,
+            "status": RUNTIME_STATUS,
+            "error": "",
+        }
     except Exception as e:
-        print(f"[main] RAG agent align skipped: {e}")
-    print("[main] Agent recreated for rebuild.")
-    checkpoint_exists = (not args.save_in_memory) and _has_checkpoint_db(AGENT_ROOT)
-    if no_initial_chat and checkpoint_exists:
-        print("[main] Runtime rebuild skipped initial chat because checkpoint exists and no_initial_chat=True")
+        agent = None
+        _set_runtime_state(ready=False, status="waiting_for_config", error=str(e))
+        print(f"[main] Runtime rebuild degraded: {e}")
         return {
             "agent_name": AGENT_NAME,
             "agent_root": AGENT_ROOT,
             "initial_chat_skipped": True,
+            "ready": False,
+            "status": RUNTIME_STATUS,
+            "error": str(e),
         }
-    if reset_dialog:
-        await invoke_agent_locked(agent,{"messages":[{"role":"system","content":PROMPT}]})
-    else:
-        await invoke_agent_locked(agent,{"messages":[{"role":"user","content":f"请继续按当前角色设定工作。\n 如果你需要重新了解你的角色设定，请读取agents/{AGENT_NAME}/AGENT.md、ROLE.md、COREMEMORY.md、TASK.md等文件来获取最新的设定内容。\n 这一条对话无需写入日记"}]})
-    print("[main] Runtime rebuild completed.")
-    return {
-        "agent_name": AGENT_NAME,
-        "agent_root": AGENT_ROOT,
-        "initial_chat_skipped": False,
-    }
 
 @app.on_event("startup")
 async def startup_event():
     global agent,checkpointer,conn,storer,conn_for_store,plugin_heartbeat_task
-    #--- Initialize the agent and its tools&middleware, including setting up the checkpoint saver and store.
-    if not os.path.exists(pjoin(AGENT_ROOT,'faust_checkpoint.db')):
-        print(f"[main] Checkpoint database not found at {pjoin(AGENT_ROOT,'faust_checkpoint.db')}. Starting with a fresh checkpoint.")
-        print("[main.startup]PROMPT makeup done.")
-        print("[main.startup]PROMPT content:\n",PROMPT)
-        NOT_INITIALIZED = True
-    else:
-        NOT_INITIALIZED = False
-    if not args.save_in_memory:
-        conn = await aiosqlite.connect(pjoin(AGENT_ROOT,'faust_checkpoint.db'))
-        checkpointer=AsyncSqliteSaver(conn=conn)
-        conn_for_store = await aiosqlite.connect(pjoin(AGENT_ROOT,'faust_store.db'))
-        storer=AsyncSqliteStore(conn=conn_for_store)
-    else:
-        checkpointer=InMemorySaver()
-        storer=InMemoryStore()
-    plugin_reload = plugin_manager.reload()
-    print(f"[plugin] reload summary: {plugin_reload}")
-    _sync_plugin_trigger_filters()
-    middlewares=[]
-    #--- End of checkpoint middleware and store setup
-    #--- Create the agent with the specified model, tools, and checkpoint/store.
-    agent=_create_agent_with_extensions(model_name=conf.CHAT_MODEL, checkpointer=checkpointer, store=storer)
-    print(f"[main]Agent created with {conf.CHAT_MODEL} model and tools.")
-    llm_tools.refresh_runtime_paths()
-    if NOT_INITIALIZED:
-        await invoke_agent_locked(agent,{"messages":[{"role":"system","content":PROMPT}]})
-    else:
-        if not conf.args.no_startup_chat:
-            await invoke_agent_locked(agent,{"messages":[{"role":"user","content":"请继续按当前角色设定工作。\n 如果你需要重新了解你的角色设定，请读取agents/{AGENT_NAME}/AGENT.md、ROLE.md、COREMEMORY.md、TASK.md等文件来获取最新的设定内容。\n 这一条对话无需写入日记"}]})
     try:
-        await admin_runtime.align_rag_agent(AGENT_NAME)
+        startup_info = await rebuild_runtime(reset_dialog=False, no_initial_chat=bool(conf.args.no_startup_chat))
+        print(f"[main] Startup runtime summary: {startup_info}")
     except Exception as e:
-        print(f"[main] Startup RAG initialization skipped: {e}")
+        agent = None
+        _set_runtime_state(ready=False, status="waiting_for_config", error=str(e))
+        print(f"[main] Startup runtime degraded: {e}")
     try:
         await vad_runtime.vad_runtime.startup()
         print("[main] VAD runtime loaded on CPU.")
@@ -468,7 +503,6 @@ async def startup_event():
         await minecraft_client.ensure_started()
     except Exception as e:
         print(f"[main] Minecraft bridge not connected on startup: {e}")
-    llm_tools.STARTED=True# 声明启动完成
     if plugin_heartbeat_task is None:
         plugin_heartbeat_task = asyncio.create_task(_plugin_heartbeat_loop())
     print("[main]FAUST Backend Main Service started.")
@@ -506,7 +540,7 @@ async def admin_reload_config(payload: dict | None = None):
 
 @app.get("/faust/admin/runtime")
 async def admin_runtime_summary_api():
-    return {"status": "ok", "runtime": admin_runtime.runtime_summary()}
+    return {"status": "ok", "runtime": {**admin_runtime.runtime_summary(), **_runtime_status_payload()}}
 
 
 @app.post("/faust/admin/live2d/apply")
@@ -1119,6 +1153,8 @@ async def chat_post(payload: dict):
         text = payload.get('text') or payload.get('message')
     if not text:
         return {"error": "no text provided"}
+    if not RUNTIME_READY or agent is None:
+        return {"error": _runtime_not_ready_message(), "runtime": _runtime_status_payload()}
     try:
         events.ignore_trigger_event.set()
         resp = await invoke_agent_locked(agent,{"messages":[{"role":"user","content":text}]})
@@ -1150,6 +1186,9 @@ async def chat_websocket(websocket: WebSocket):
                 text = payload.get("text") or payload.get("message")
             if not text:
                 await websocket.send_text(json.dumps({"type": "error", "error": "no text provided"}, ensure_ascii=False))
+                continue
+            if not RUNTIME_READY or agent is None:
+                await websocket.send_text(json.dumps({"type": "error", "error": _runtime_not_ready_message(), "runtime": _runtime_status_payload()}, ensure_ascii=False))
                 continue
 
             try:
@@ -1190,6 +1229,9 @@ async def command_websocket(websocket: WebSocket):
             if backend2frontend.hasFrontEndTask():
                 await websocket.send_text(backend2frontend.popFrontEndTask())
             if trigger_manager.has_queue_task() and not events.ignore_trigger_event.is_set():
+                if not RUNTIME_READY or agent is None:
+                    await asyncio.sleep(0.1)
+                    continue
                 # activate chat
                 task=trigger_manager.get_next_trigger()
                 trigger_text = f"<Trigger>触发器唤醒了你，请根据触发器内容执行相应操作。{str(task)}"

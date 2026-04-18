@@ -16,16 +16,25 @@ CONFIG_FILE_P_PATH = p_join(CONFIG_ROOT, 'faust.config.private.json')
 CONFIG_FILE_P_EXAMPLE=p_join(CONFIG_ROOT, 'faust.config.private.example')
 DATA_ROOT=p_join(CONFIG_ROOT, 'data')
 CONFIG_FILE_PATH= p_join(CONFIG_ROOT, 'faust.config.json')
+PRIVATE_CONFIG_AUTO_CREATED = False
+PRIVATE_CONFIG_WAS_MISSING = False
 
 
 def _ensure_private_config_exists():
+    global PRIVATE_CONFIG_AUTO_CREATED, PRIVATE_CONFIG_WAS_MISSING
     if os.path.exists(CONFIG_FILE_P_PATH):
+        PRIVATE_CONFIG_WAS_MISSING = False
         return
+    PRIVATE_CONFIG_WAS_MISSING = True
     print("[config_loader] Private config file not found." )
     print("     这说明你没有指定大模型KEY,请自行申请并且填入")
-    shutil.copy(CONFIG_FILE_P_EXAMPLE, CONFIG_FILE_P_PATH)
+    if os.path.exists(CONFIG_FILE_P_EXAMPLE):
+        shutil.copy(CONFIG_FILE_P_EXAMPLE, CONFIG_FILE_P_PATH)
+    else:
+        with open(CONFIG_FILE_P_PATH, 'w', encoding='utf-8') as f:
+            json.dump({}, f, ensure_ascii=False, indent=4)
+    PRIVATE_CONFIG_AUTO_CREATED = True
     print(f"    已经使用模板文件创建了一个新的私密配置文件: {CONFIG_FILE_P_PATH}")
-    raise FileNotFoundError(f"Private config file not found: {CONFIG_FILE_P_PATH}")
 
 
 def load_configs():
